@@ -1,91 +1,186 @@
 import os
-from py_clob_client.client import ClobClient
-import websocket
 import json
-import threading
 import time
 import requests
+import websocket
+import threading
+from py_clob_client.client import ClobClient
 
-# Initialize client
+# -------------------------------
+# Constants
+# -------------------------------
 host = "https://clob.polymarket.com"
-key = os.getenv("POLYMARKET_API_KEY")  # Make sure to set this in your environment
+key = os.getenv("POLYMARKET_API_KEY")
 chain_id = 137
 client = ClobClient(host, key=key, chain_id=chain_id)
 
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+NAME_MAP_FILE = "token_name_map.json"
+CACHE_TTL_SECONDS = 60 * 60  # 1 hour
 
 # -------------------------------
-# Fetch Token IDs from Sampling Markets
+# Global
 # -------------------------------
-def fetch_sampling_market_token_ids():
-    token_ids = set()
+token_name_map = {}  # token_id -> market_slug
+market_name_map = {}  # market_slug -> condition_id
+
+# -------------------------------
+# Cache Helpers
+# -------------------------------
+def load_json_cache(path):
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r") as f:
+            data = json.load(f)
+            if time.time() - data["timestamp"] < CACHE_TTL_SECONDS:
+                return data["data"]
+    except Exception as e:
+        print(f"⚠️ Failed to load cache from {path}:", e)
+    return None
+
+def save_json_cache(path, payload):
+    try:
+        with open(path, "w") as f:
+            json.dump({"timestamp": time.time(), "data": payload}, f)
+    except Exception as e:
+        print(f"⚠️ Failed to save cache to {path}:", e)
+
+# -------------------------------
+# Fetch Token Map with Caching
+# -------------------------------
+def fetch_token_name_map():
+    cached_map = load_json_cache(NAME_MAP_FILE)
+    if cached_map:
+        print(f"✅ Loaded {len(cached_map)} tokens from cache.")
+        return cached_map
+
+    print("🔄 Fetching fresh token name map...")
+    token_name_map = {}
+    market_name_map = {}
     cursor = ""
-    
+
+    headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Polymarket-Live-Data/1.0',
+        'Content-Type': 'application/json'
+    }
+
     while True:
         try:
-            response = requests.get(f"{host}/sampling-markets?next_cursor={cursor}")
-            response.raise_for_status()
-            payload = response.json()
+            url = f"{host}/sampling-markets?next_cursor={cursor}"
+            print(f"🌐 Requesting: {url}")
+            resp = requests.get(url, headers=headers)
+            print(f"🔁 Status Code: {resp.status_code}")
+            resp.raise_for_status()
 
-            for market in payload.get("data", []):
+            try:
+                payload = resp.json()
+            except json.JSONDecodeError:
+                print("❌ Failed to decode JSON.")
+                print("📄 Raw Response:", resp.text[:500])
+                break
+
+            markets = payload.get("data", [])
+            print(f"📦 Received {len(markets)} markets")
+
+            for market in markets:
+                name = market.get("market_slug")
+                condition_id = market.get("condition_id")
+                if name and condition_id:
+                    market_name_map[name] = condition_id
                 for token in market.get("tokens", []):
-                    token_id = token.get("token_id")
-                    if token_id:
-                        token_ids.add(token_id)
+                    tid = token.get("token_id")
+                    if tid and name:
+                        token_name_map[tid] = name
 
             cursor = payload.get("next_cursor")
             if not cursor or cursor == "LTE=":
-                break  # done paginating
+                print("✅ Done fetching all pages.")
+                break
 
-        except Exception as e:
-            print("❌ Error fetching sampling markets:", e)
+        except requests.RequestException as req_err:
+            print(f"❌ Request failed: {req_err}")
+            print("📄 Response text (truncated):", resp.text[:500] if 'resp' in locals() else "No response")
             break
 
-    return list(token_ids)
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            break
 
+    print(f"🔎 Sample token name map entries: {list(token_name_map.items())[:3]}")
+    print(f"🔎 Sample market name map entries: {list(market_name_map.items())[:3]}")
+    save_json_cache(NAME_MAP_FILE, token_name_map)
+    print(f"💾 Saved {len(token_name_map)} token names to cache.")
+    return token_name_map, market_name_map
 
 # -------------------------------
 # WebSocket Handlers
 # -------------------------------
 def handle_book(msg):
-    print(f"\n📘 BOOK: {msg['market']}")
+    asset_id = msg.get("asset_id", "unknown")
+    market_id = msg.get("market", "unknown")
+    market_name = token_name_map.get(asset_id, f"Unknown Market ({market_id})")
+    timestamp = msg.get("timestamp", "unknown")
+    print(f"\n📘 BOOK UPDATE for {market_name} at {timestamp}")
+    print("  🟩 BUYS:")
     for b in msg.get("buys", []):
-        print(f"🟩 Buy: {b['price']} x {b['size']}")
+        print(f"    {b.get('price')} x {b.get('size')}")
+    print("  🔵 SELLS:")
     for s in msg.get("sells", []):
-        print(f"🟥 Sell: {s['price']} x {s['size']}")
+        print(f"    {s.get('price')} x {s.get('size')}")
+
+def handle_price_change(msg):
+    asset_id = msg.get("asset_id", "unknown")
+    market_id = msg.get("market", "unknown")
+    market_name = token_name_map.get(asset_id, f"Unknown Market ({market_id})")
+    timestamp = msg.get("timestamp", "unknown")
+    print(f"\n📈 PRICE CHANGES for {market_name} at {timestamp}:")
+    for change in msg.get("changes", []):
+        side = change.get("side", "UNKNOWN")
+        price = change.get("price", "0")
+        size = change.get("size", "0")
+        print(f"  {side}: {price} x {size}")
+
+def handle_tick_size_change(msg):
+    asset_id = msg.get("asset_id", "unknown")
+    market_id = msg.get("market", "unknown")
+    market_name = token_name_map.get(asset_id, f"Unknown Market ({market_id})")
+    old_tick = msg.get("old_tick_size", "unknown")
+    new_tick = msg.get("new_tick_size", "unknown")
+    timestamp = msg.get("timestamp", "unknown")
+    print(f"\n📏 TICK SIZE CHANGE for {market_name} at {timestamp}")
+    print(f"  Old: {old_tick} → New: {new_tick}")
 
 def handle_event(msg):
     event_type = msg.get("event_type")
     if event_type == "book":
-        #handle_book(msg)
-        print("book")
+        handle_book(msg)
     elif event_type == "price_change":
-        #handle_price_change(msg)
-        print("price_change")
+        handle_price_change(msg)
     elif event_type == "tick_size_change":
-        #handle_tick_size_change(msg)
-        print("tick_size_change")
+        handle_tick_size_change(msg)
     else:
         print(f"⚠️ Unknown event_type: {event_type}")
+        print(json.dumps(msg, indent=2))
 
 def on_message(ws, message):
     try:
+        if message == "PONG":
+            print("🔂 Received PONG")
+            return
+
+        print(f"📩 Raw message: {message[:120]}...")
         msg = json.loads(message)
 
-        # Case 1: message is a list of event dicts
         if isinstance(msg, list):
             for event in msg:
                 if isinstance(event, dict):
                     handle_event(event)
                 else:
                     print("⚠️ Skipped non-dict item in list:", event)
-            return
-
-        # Case 2: single event dict
         elif isinstance(msg, dict):
             handle_event(msg)
-
-        # Case 3: unexpected message type
         else:
             print(f"⚠️ Unexpected message type: {type(msg)}")
 
@@ -94,14 +189,28 @@ def on_message(ws, message):
     except Exception as e:
         print(f"⚠️ Error parsing message: {e}")
 
-
 def on_open(ws):
+    global token_name_map
     print("🟢 WebSocket connected.")
-    assets = fetch_sampling_market_token_ids()
-    for i in range(0, len(assets), 100):
-        batch = assets[i:i+100]
-        ws.send(json.dumps({"type": "MARKET", "assets_ids": batch}))
-        print(f"📡 Subscribed to {len(batch)} tokens.")
+
+    try:
+        token_name_map, market_name_map = fetch_token_name_map()
+        token_ids = list(token_name_map.keys())
+
+        if not token_ids:
+            print("⚠️ No token IDs found. Skipping subscription.")
+            return
+
+        print(f"🧾 First few token IDs: {token_ids[:3]}")
+
+        for i in range(0, len(token_ids), 100):
+            batch = token_ids[i:i+100]
+            print(f"📨 Subscribing to batch {i//100 + 1}: {batch[:2]}")
+            ws.send(json.dumps({"type": "MARKET", "assets_ids": batch}))
+            print(f"📱 Subscribed to {len(batch)} tokens.")
+
+    except Exception as e:
+        print(f"❌ Error during WebSocket on_open: {e}")
 
     def keep_alive():
         while True:
@@ -109,13 +218,17 @@ def on_open(ws):
             try:
                 ws.send(json.dumps({"type": "ping"}))
                 print("📶 Ping sent")
-            except:
+            except Exception as e:
+                print(f"❌ Ping failed: {e}")
                 break
 
     threading.Thread(target=keep_alive, daemon=True).start()
 
-def on_error(ws, err): print("❌ WebSocket error:", err)
-def on_close(ws, code, reason): print("🔌 WebSocket closed:", reason)
+def on_error(ws, err):
+    print("❌ WebSocket error:", err)
+
+def on_close(ws, code, reason):
+    print(f"🔌 WebSocket closed (code={code}): {reason}")
 
 # -------------------------------
 # Run it
