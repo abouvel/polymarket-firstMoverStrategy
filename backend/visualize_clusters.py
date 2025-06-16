@@ -17,7 +17,8 @@ import joblib
 import concurrent.futures
 import threading
 import time
-from ollama import chat, ResponseError
+import asyncio
+from ollama import AsyncClient, chat
 
 
 # Set up joblib cache directory
@@ -70,8 +71,8 @@ def get_cluster_labels(coords_2d, method='kmeans', n_clusters=10, dbscan_eps=5, 
         raise ValueError(f"Unknown clustering method: {method}")
     return labels
 
-# Cleaned up summarization function using only the Ollama Python SDK
-def summarize_cluster(events, model="gemma3:1b", max_events=12):
+async def summarize_cluster_async(events, model="gemma3:1b", max_events=12):
+    """Async version of summarize_cluster using Ollama's AsyncClient."""
     selected = events[:max_events]
     prompt = (
         "Here is a list of current Polymarket event titles:\n"
@@ -80,57 +81,82 @@ def summarize_cluster(events, model="gemma3:1b", max_events=12):
         "Your task is to identify a single, clear theme that connects these events. Focus on the underlying subject matter—not the fact that these are prediction markets or betting events.\n\n"
         "Return one short, creative, and specific phrase that best captures the shared topic. Do not include any explanation or reasoning—just the phrase.\n\n"
         "Some examples of good outputs (for reference only):\n"
-        "- “AI Policy Debates”\n"
-        "- “2024 Senate Races”\n"
-        "- “Crypto Drama”\n"
-        "- “European Geopolitics”\n\n"
+        "- \"AI Policy Debates\"\n"
+        "- \"2024 Senate Races\"\n"
+        "- \"Crypto Drama\"\n"
+        "- \"European Geopolitics\"\n\n"
         "These are just illustrative. Your output should reflect the unique theme of the provided list."
     )
-
     print(f"[Summarize] Sending prompt to Ollama for cluster of {len(events)} events.")
     try:
-        response = chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        client = AsyncClient()
+        response = await client.chat(model=model, messages=[{"role": "user", "content": prompt}])
         summary = response.message.content.strip()
         if not summary:
             print("[Summarize] WARNING: Ollama returned an empty summary. Using fallback.")
             summary = "(No summary generated)"
         print(f"[Summarize] Ollama returned: {summary}")
         return summary
-    except ResponseError as e:
-        print(f"[Summarize] Ollama error: {e.error}")
-        return "(AI summary error)"
     except Exception as e:
-        print(f"[Summarize] General error: {e}")
+        print(f"[Summarize] Error: {e}")
         return "(AI summary error)"
 
-# Parallel summarization using the SDK
-def start_parallel_summarization(clusters, model="gemma3:1b", max_events=12):
-    global summaries_ready, cluster_labels, last_n_clusters
-    def summarize_and_store(cid, events):
+async def summarize_cluster_async_stream(events, model="gemma3:1b", max_events=12):
+    """Streaming version of summarize_cluster_async."""
+    selected = events[:max_events]
+    prompt = (
+        "Here is a list of current Polymarket event titles:\n"
+        + "\n".join(f"- {e}" for e in selected)
+        + "\n\nYou are an expert in global current events, with deep knowledge across domains like Politics, Sports, Crypto, Tech, Culture, World Affairs, the Economy, U.S. Elections, and public figures such as Donald Trump.\n\n"
+        "Your task is to identify a single, clear theme that connects these events. Focus on the underlying subject matter—not the fact that these are prediction markets or betting events.\n\n"
+        "Return one short, creative, and specific phrase that best captures the shared topic. Do not include any explanation or reasoning—just the phrase.\n\n"
+        "Some examples of good outputs (for reference only):\n"
+        "- \"AI Policy Debates\"\n"
+        "- \"2024 Senate Races\"\n"
+        "- \"Crypto Drama\"\n"
+        "- \"European Geopolitics\"\n\n"
+        "These are just illustrative. Your output should reflect the unique theme of the provided list."
+    )
+    print(f"[Summarize] Sending prompt to Ollama for cluster of {len(events)} events.")
+    try:
+        client = AsyncClient()
+        full_summary = ""
+        async for part in await client.chat(model=model, messages=[{"role": "user", "content": prompt}], stream=True):
+            content = part['message']['content']
+            full_summary += content
+            print(content, end='', flush=True)
+        print()  # New line after streaming
+        if not full_summary:
+            print("[Summarize] WARNING: Ollama returned an empty summary. Using fallback.")
+            full_summary = "(No summary generated)"
+        return full_summary.strip()
+    except Exception as e:
+        print(f"[Summarize] Error: {e}")
+        return "(AI summary error)"
+
+async def start_parallel_summarization_async(clusters, model="gemma3:1b", max_events=12):
+    """Async version of start_parallel_summarization."""
+    global summaries_ready, cluster_labels
+    tasks = []
+    for cid, events in clusters.items():
+        if cid == -1:
+            continue
         print(f"[Summarize] Starting summary for cluster {cid}...")
-        summary = summarize_cluster(events, model=model, max_events=max_events)
-        with cluster_summaries_lock:
-            cluster_labels[cid] = summary
-        print(f"[Summarize] Stored summary for cluster {cid}.")
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = []
-        for cid, events in clusters.items():
-            if cid == -1:
-                continue
-            futures.append(executor.submit(summarize_and_store, cid, events))
-        # Wait for all to finish
-        for f in futures:
-            f.result()
+        task = asyncio.create_task(summarize_cluster_async_stream(events, model=model, max_events=max_events))
+        tasks.append((cid, task))
+    
+    for cid, task in tasks:
+        try:
+            summary = await task
+            with cluster_summaries_lock:
+                cluster_labels[cid] = summary
+            print(f"[Summarize] Stored summary for cluster {cid}.")
+        except Exception as e:
+            print(f"[Summarize] Error summarizing cluster {cid}: {e}")
+            with cluster_summaries_lock:
+                cluster_labels[cid] = "(Error generating summary)"
+    
     summaries_ready = True
-
-
-
-def get_cluster_summary(cid):
-    with cluster_summaries_lock:
-        return cluster_summaries_cache.get(cid, "Loading...")
 
 def create_cluster_visualization_with_metadata(
     eps=0.1, min_samples=2, clustering_method='agglomerative', n_clusters=10, selected_cluster='all', tsne_perplexity=30, tsne_random_state=42):
@@ -156,25 +182,23 @@ def create_cluster_visualization_with_metadata(
 
     # Only start summarization if n_clusters changed or first load
     if last_n_clusters != n_clusters:
-        
         print(f"[Summarize] n_clusters changed from {last_n_clusters} to {n_clusters}, starting summarization.")
         summaries_ready = False
-        last_n_clusters = n_clusters
         cluster_labels.clear()
         last_n_clusters = n_clusters
-        threading.Thread(target=start_parallel_summarization, args=(clusters,), daemon=True).start()
+        # Start async summarization in a new thread
+        def run_async_summarization():
+            asyncio.run(start_parallel_summarization_async(clusters))
+        threading.Thread(target=run_async_summarization, daemon=True).start()
 
     fig = go.Figure()
-    if not summaries_ready:
-        fig.update_layout(title='Loading cluster summaries...', xaxis={'visible': False}, yaxis={'visible': False})
-        return fig, cluster_ids, {}
-    # Otherwise, plot with real cluster_labels
+    # Always show the visualization, even if summaries aren't ready
     if selected_cluster != 'all':
         cid = int(selected_cluster)
         events = clusters[cid]
         cluster_indices = [i for i, text in enumerate(texts) if text in events]
         cluster_coords = coords_2d[cluster_indices]
-        label = cluster_labels.get(cid, '')
+        label = cluster_labels.get(cid, 'Loading...')
         if len(cluster_coords) >= 3:
             try:
                 hull = ConvexHull(cluster_coords)
@@ -214,7 +238,7 @@ def create_cluster_visualization_with_metadata(
                 continue
             cluster_indices = [i for i, text in enumerate(texts) if text in events]
             cluster_coords = coords_2d[cluster_indices]
-            label = cluster_labels.get(cluster_id, '')
+            label = cluster_labels.get(cluster_id, 'Loading...')
             if len(cluster_coords) >= 3:
                 try:
                     hull = ConvexHull(cluster_coords)
