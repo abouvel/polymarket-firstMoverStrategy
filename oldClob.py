@@ -71,7 +71,7 @@ def handle_event(msg):
 def on_message(ws, message):
     try:
         msg = json.loads(message)
-       #
+    
         # Case 1: message is a list of event dicts
         if isinstance(msg, list):
             for event in msg:

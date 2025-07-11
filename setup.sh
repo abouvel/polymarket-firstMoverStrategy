@@ -1,9 +1,12 @@
 #!/bin/bash
 
 # Install backend dependencies
-pip install flask flask-cors flask-socketio python-socketio
+pip install -r requirements.txt
 
 # Install frontend dependencies
-cd frontend
-npm install react-router-dom socket.io-client
-cd .. 
+npm install
+# Install additional frontend dependencies if needed
+npm install react-router-dom socket.io-client @types/socket.io-client
+
+# Build the frontend
+npm run build 
