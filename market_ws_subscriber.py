@@ -12,7 +12,7 @@ async def subscribeToAll():
         rows = await conn.fetch("SELECT id FROM tokens;")
         asset_ids = [row['id'] for row in rows]
         MarketWS = createMarketWS(asset_ids, None, True)
-        MarketWS.run()
+        await MarketWS.run()
     finally:
         await conn.close()
 

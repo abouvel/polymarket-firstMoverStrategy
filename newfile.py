@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from dbConnect import get_db_connection, create_markets_and_tokens_tables, create_tables_async  # Import connection function
 from datetime import datetime, timezone
 import asyncpg
-from websocketPoly import WebSocketOrderBook
 
 # Load environment variables
 load_dotenv()
