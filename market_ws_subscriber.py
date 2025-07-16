@@ -23,15 +23,13 @@ def connect():
     chain_id: int = 137 # No need to adjust this
     POLYMARKET_PROXY_ADDRESS: str = os.getenv("POLY_ADDRESS")  # Loaded from .env
 
-    # Select from the following 3 initialization options to match your login method, and remove any unused lines so only one client is initialized.
+async def run_all():
+        # Scrape all markets and store in DB
+    await fetch_active_markets()
+        # After scraping, subscribe to all
+    await subscribeToAll()
 
-    ### Initialization of a client using a Polymarket Proxy associated with an Email/Magic account. If you login with your email use this example.
-    # client = ClobClient(host, key=key, chain_id=chain_id, signature_type=1, funder=POLYMARKET_PROXY_ADDRESS)
 
-    ### Initialization of a client using a Polymarket Proxy associated with a Browser Wallet(Metamask, Coinbase Wallet, etc)
-    client = ClobClient(host, key=key, chain_id=chain_id, signature_type=1, funder=POLYMARKET_PROXY_ADDRESS)
-
-    subscribeToAll
 async def load_or_fetch_markets(conn):
     """Load markets from DB, or fetch if none exist."""
     # Check if any markets exist
@@ -63,4 +61,4 @@ async def main():
 
 # For testing, you can run this file directly
 if __name__ == "__main__":
-    asyncio.run(subscribeToAll()) 
+    asyncio.run(run_all()) 

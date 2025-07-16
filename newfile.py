@@ -8,11 +8,21 @@ from dotenv import load_dotenv
 from dbConnect import get_db_connection, create_markets_and_tokens_tables, create_tables_async  # Import connection function
 from datetime import datetime, timezone
 import asyncpg
+from py_clob_client.client import ClobClient
+from py_clob_client.clob_types import BookParams
 
 # Load environment variables
 load_dotenv()
-
 host = "https://clob.polymarket.com"
+
+def connect_clob_client():
+    load_dotenv()
+
+    """Create and return a ClobClient using environment variables."""
+    key = os.getenv("POLY_KEY")
+    POLYMARKET_PROXY_ADDRESS = os.getenv("POLY_ADDRESS")
+    chain_id = 137
+    return ClobClient(host, key=key, chain_id=chain_id, signature_type=1, funder=POLYMARKET_PROXY_ADDRESS)
 
 def get_db_config():
     """Return DB config from environment variables."""
@@ -29,7 +39,7 @@ async def get_asyncpg_connection():
     config = get_db_config()
     return await asyncpg.connect(**config)
 
-async def fetch_active_markets(limit=None, batch_size=50, conn=None):
+async def fetch_active_markets(limit=None, batch_size=50, conn=None, clob_client=None):
     """Fetch and return all active Polymarket markets. Optionally accept an existing DB connection."""
     stored = 0
     skipped = 0
@@ -41,6 +51,8 @@ async def fetch_active_markets(limit=None, batch_size=50, conn=None):
     if conn is None:
         conn = await get_asyncpg_connection()
         close_conn = True
+    if clob_client is None:
+        clob_client = connect_clob_client()
     
     # Create tables if they don't exist
     await create_tables_async(conn)
@@ -69,7 +81,7 @@ async def fetch_active_markets(limit=None, batch_size=50, conn=None):
                     
                     # Process batch when it reaches batch_size or at the end
                     if len(batch) >= batch_size:
-                        batch_stored = await process_market_batch(batch, conn)
+                        batch_stored = await process_market_batch(batch, conn, clob_client)
                         stored += batch_stored
                         batch = []
 
@@ -78,7 +90,7 @@ async def fetch_active_markets(limit=None, batch_size=50, conn=None):
 
                 # Process remaining markets in the last batch
                 if batch:
-                    batch_stored = await process_market_batch(batch, conn)
+                    batch_stored = await process_market_batch(batch, conn, clob_client)
                     stored += batch_stored
 
                 if limit and processed >= limit:
@@ -98,7 +110,7 @@ async def fetch_active_markets(limit=None, batch_size=50, conn=None):
     print(f"Processed: {processed}, Stored: {stored}, Skipped: {skipped}")
     return {"processed": processed, "stored": stored, "skipped": skipped}
 
-async def process_market_batch(markets, conn):
+async def process_market_batch(markets, conn, clob_client):
     """Process a batch of markets concurrently"""
     now = datetime.now(timezone.utc)
     valid_markets = []
@@ -163,25 +175,33 @@ async def process_market_batch(markets, conn):
     if not valid_markets:
         return 0
     
-    # Batch insert markets and tokens
     try:
         # Prepare batch data
         market_data = []
         token_data = []
-        
+        price_params = []
+        token_id_to_info = {}
         for market, expiry_date in valid_markets:
             condition_id = market.get("condition_id")
             title = market.get("question", "")
             tokens = market.get("tokens", [])
-            
             market_data.append((condition_id, title, expiry_date))
-            
             for token in tokens:
                 token_id = token.get("token_id")
                 token_name = token.get("outcome")
                 if token_id:
-                    token_data.append((token_id, condition_id, token_name))
-        
+                    price_params.append(BookParams(token_id=token_id, side="BUY"))
+                    price_params.append(BookParams(token_id=token_id, side="SELL"))
+                    token_id_to_info[token_id] = (condition_id, token_name)
+        # Fetch prices for all tokens in the batch
+        if price_params:
+            resp = clob_client.get_prices(params=price_params)
+            # resp: {token_id: {"BUY": price, "SELL": price}}
+            for token_id, (condition_id, token_name) in token_id_to_info.items():
+                prices = resp.get(token_id, {})
+                bid_price = prices.get("BUY")
+                ask_price = prices.get("SELL")
+                token_data.append((token_id, condition_id, token_name, bid_price, ask_price))
         # Batch insert markets
         if market_data:
             await conn.executemany("""
@@ -191,18 +211,15 @@ async def process_market_batch(markets, conn):
                     title = EXCLUDED.title,
                     expiry_date = EXCLUDED.expiry_date;
             """, market_data)
-        
-        # Batch insert tokens
+        # Batch insert tokens (with bid/ask)
         if token_data:
             await conn.executemany("""
-                INSERT INTO tokens (id, market_id, name)
-                VALUES ($1, $2, $3)
+                INSERT INTO tokens (id, market_id, name, bid_price, ask_price)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (id) DO NOTHING;
             """, token_data)
-        
         print(f"✅ Batch stored: {len(valid_markets)} markets | {len(token_data)} tokens")
         return len(valid_markets)
-        
     except Exception as e:
         print(f"⚠️ Error storing batch: {e}")
         return 0
