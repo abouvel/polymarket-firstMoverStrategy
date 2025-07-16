@@ -33,8 +33,8 @@ class WebSocketOrderBook:
             raise Exception("Invalid channel type or missing auth for user channel.")
 
     async def on_message(self, message):
-        if self.verbose:
-            print(message)
+        # if self.verbose:
+        #     #print(message)
         try:
             data = json.loads(message)
         except json.JSONDecodeError as e:
@@ -95,6 +95,18 @@ class WebSocketOrderBook:
                         "UPDATE tokens SET ask_price = $1 WHERE id = $2",
                         best_ask, asset_id
                     )
+                # Fetch updated bid and ask from the database
+                row = await conn.fetchrow(
+                    "SELECT bid_price, ask_price FROM tokens WHERE id = $1",
+                    asset_id
+                )
+                if row is not None:
+                    bid = row["bid_price"]
+                    ask = row["ask_price"]
+                    if bid is not None and ask is not None:
+                        spread = ask - bid
+                        if 0.05 < spread < 0.1:
+                            print(f"Spread for {asset_id} is {spread:.4f}, which is between 0.05 and 0.1")
             except Exception as db_exc:
                 logging.error(f"Database error updating best bid/ask for asset_id {asset_id}: {db_exc}")
             finally:
