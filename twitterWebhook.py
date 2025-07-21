@@ -12,7 +12,8 @@ client = chromadb.PersistentClient(path=chroma_path)
 
 # 🔁 Create (or get) the collection
 collection = client.get_or_create_collection(name="tweets")
-
+def get_collection():
+    return collection
 app = FastAPI()
 
 @app.post("/receive")
@@ -26,7 +27,7 @@ async def receive_tweet(request: Request):
     if not tweet_text:
         return {"error": "No tweet text provided"}
 
-    doc_id = str(uuid.uuid4())
+    tweet_id = data.get("tweet_id")
 
     collection.add(
         documents=[tweet_text],
@@ -34,8 +35,9 @@ async def receive_tweet(request: Request):
             "username": username,
             "url": tweet_url
         }],
-        ids=[doc_id]
+        ids=[tweet_id]
     )
 
     print(f"✅ Stored tweet from @{username}")
-    return {"status": "stored", "id": doc_id}
+    print(f"tweet id: {tweet_id}")
+    return {"status": "stored", "id": tweet_id}
