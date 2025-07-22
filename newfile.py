@@ -204,21 +204,35 @@ async def process_market_batch(markets, conn, clob_client):
                 token_data.append((token_id, condition_id, token_name, bid_price, ask_price))
         # Batch insert markets
         if market_data:
-            await conn.executemany("""
-                INSERT INTO markets (id, title, expiry_date)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (id) DO UPDATE SET 
-                    title = EXCLUDED.title,
-                    expiry_date = EXCLUDED.expiry_date;
-            """, market_data)
+            # await conn.executemany("""
+            #     INSERT INTO markets (id, title, expiry_date)
+            #     VALUES ($1, $2, $3)
+            #     ON CONFLICT (id) DO UPDATE SET 
+            #         title = EXCLUDED.title,
+            #         expiry_date = EXCLUDED.expiry_date;
+            # """, market_data)
+
+            # Push each market to the /poly endpoint
+            poly_url = "http://localhost:8000/poly"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                for market_id, market_name, _ in market_data:
+                    try:
+                        payload = {"id": market_id, "name": market_name}
+                        resp = await client.post(poly_url, json=payload)
+                        if resp.status_code == 200:
+                            print(f"[Chroma] Pushed event {market_id} - {market_name}")
+                        else:
+                            print(f"[Chroma] Failed to push event {market_id}: {resp.text}")
+                    except Exception as e:
+                        print(f"[Chroma] Exception pushing event {market_id}: {e}")
         # Batch insert tokens (with bid/ask)
-        if token_data:
-            await conn.executemany("""
-                INSERT INTO tokens (id, market_id, name, bid_price, ask_price)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (id) DO NOTHING;
-            """, token_data)
-        print(f"✅ Batch stored: {len(valid_markets)} markets | {len(token_data)} tokens")
+        # if token_data:
+        #     await conn.executemany("""
+        #         INSERT INTO tokens (id, market_id, name, bid_price, ask_price)
+        #         VALUES ($1, $2, $3, $4, $5)
+        #         ON CONFLICT (id) DO NOTHING;
+        #     """, token_data)
+        # print(f"✅ Batch stored: {len(valid_markets)} markets | {len(token_data)} tokens")
         return len(valid_markets)
     except Exception as e:
         print(f"⚠️ Error storing batch: {e}")
