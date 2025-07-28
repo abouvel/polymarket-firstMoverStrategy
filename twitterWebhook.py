@@ -95,4 +95,5 @@ async def receive_tweet(request: Request):
     print(f"✅ Stored tweet from @{username}")
     print(f"tweet id: {tweet_id}")
 
-    runcom(tweet_id)
+
+    runcom(tweet_text)
