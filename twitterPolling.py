@@ -1,93 +1,68 @@
-from playwright.sync_api import sync_playwright
-import time
+import snscrape.modules.twitter as sntwitter
+import aiohttp
+import asyncio
+import certifi
 import os
-import requests
-from twitterWebhook import collection
 
-USERNAME = "ABouvel16870"
+os.environ['SSL_CERT_FILE'] = certifi.where()
+
+# ==== CONFIG ====
+ACCOUNTS = ["ABouvel16870", "unusual_whales"]  # Twitter usernames
 WEBHOOK_URL = "http://localhost:8000/receive"
-SESSION_FILE = "twitter_session.json"
+POLL_INTERVAL = 10  # seconds
 
-def build_injected_script(username):
-    return f"""
-    const observer = new MutationObserver((mutationsList) => {{
-        for (const mutation of mutationsList) {{
-            for (const node of mutation.addedNodes) {{
-                if (node.nodeType === 1 && node.querySelector("a[href*='/{username}/status/']")) {{
-                    const text = node.innerText;
-                    const linkNode = node.querySelector("a[href*='/{username}/status/']");
-                    const tweetUrl = linkNode ? "https://twitter.com" + linkNode.getAttribute("href") : "";
+# ==== STATE ====
+last_seen_ids = {}
 
-                    console.log("TWEET_DETECTED|" + text + "|URL|" + tweetUrl);
-                }}
-            }}
-        }}
-    }});
-    observer.observe(document.body, {{ childList: true, subtree: true }});
-    """
+# ==== FETCH LATEST TWEET ====
+async def get_latest_tweet(username):
+    try:
+        return next(sntwitter.TwitterUserScraper(username).get_items())
+    except Exception as e:
+        print(f"❌ Error fetching @{username}: {e}")
+        return None
 
+# ==== SEND WEBHOOK ====
+async def send_webhook(session, tweet, username):
+    payload = {
+        "username": username,
+        "tweet_id": tweet.id,
+        "tweet_text": tweet.content,
+        "url": f"https://x.com/{username}/status/{tweet.id}"
+    }
+    try:
+        async with session.post(WEBHOOK_URL, json=payload, timeout=5) as resp:
+            print(f"✅ Sent @{username}: {tweet.content[:40]}... ({resp.status})")
+    except Exception as e:
+        print(f"❌ Webhook error for @{username}: {e}")
 
+# ==== PER-USER TASK ====
+async def monitor_user(session, username):
+    tweet = await get_latest_tweet(username)
+    if not tweet:
+        return
+    if last_seen_ids.get(username) != tweet.id:
+        last_seen_ids[username] = tweet.id
+        await send_webhook(session, tweet, username)
+    else:
+        print(f"⏸️ No new tweet from @{username}")
 
+# ==== SIMPLE SYNC TEST ====
+def test_single_user(username):
+    print(f"🔍 Checking latest tweet from @{username}")
+    tweet = next(sntwitter.TwitterUserScraper(username).get_items())
+    print(f"🟢 Latest tweet:\n{tweet.content}\n→ {tweet.date} — https://x.com/{username}/status/{tweet.id}")
 
-def run_watcher():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(storage_state=SESSION_FILE)
-        page = context.new_page()
-        page.goto(f"https://twitter.com/{USERNAME}", timeout=20000)
-        print(f"📡 Watching @{USERNAME} (polling every 10s)...")
-
-        try:
-            while True:
-                page.reload()
-                time.sleep(3)
-
-                tweets = page.locator(f"a[href*='/{USERNAME}/status/']").all()
-
-                if tweets:
-                    url = tweets[0].get_attribute("href")
-                    if not url:
-                        time.sleep(10)
-                        continue
-
-                    tweet_id = url.split("/")[-1]
-                    full_url = f"https://twitter.com{url}"
-
-                    # ✅ Get full tweet text, not just timestamp
-                    tweet_container = tweets[0].locator("xpath=ancestor::article")
-                    text = tweet_container.inner_text()
-
-                    # Check if tweet is already in Chroma
-                    try:
-                        result = collection.get(ids=[tweet_id])
-                        if tweet_id in result["ids"]:
-                            print(f"🔁 Already processed tweet ID {tweet_id}, skipping.")
-                            time.sleep(10)
-                            continue
-                    except Exception as e:
-                        print(f"⚠️ Error checking Chroma for ID {tweet_id}: {e}")
-
-
-                    print(f"📢 New tweet detected: {text}")
-                    try:
-                        response = requests.post(WEBHOOK_URL, json={
-                            "username": USERNAME,
-                            "tweet_text": text,
-                            "url": full_url,
-                            "tweet_id": tweet_id
-                        }, timeout=5)
-                        print(f"✅ Webhook sent: {response.status_code} and Text: {text}")
-                    except Exception as e:
-                        print(f"❌ Failed to send webhook: {e}")
-
-                time.sleep(10)
-        except KeyboardInterrupt:
-            print("👋 Stopping...")
-            browser.close()
-
-
-
-
+# ==== MAIN LOOP ====
+async def main():
+    async with aiohttp.ClientSession() as session:
+        while True:
+            tasks = [monitor_user(session, user) for user in ACCOUNTS]
+            await asyncio.gather(*tasks)
+            await asyncio.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
-    run_watcher()
+    # asyncio.run(main())  # Commented out async polling
+
+    # Run a one-time sync scrape for ABouvel16870
+    test_single_user("ABouvel16870")
