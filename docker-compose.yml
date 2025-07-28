@@ -1,0 +1,56 @@
+# To start all services, simply run:
+#     docker-compose up -d
+# Ensure you have a valid requirements.txt at the project root (run `pip freeze > requirements.txt`).
+# If you encounter build errors, prefix with:
+#     COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up -d
+
+services:
+  postgres:
+    image: postgres:13
+    container_name: polymarket-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT}:5432"
+
+  twitter-webhook:
+    image: python:3.11-slim
+    container_name: twitter-webhook
+    restart: always
+    env_file: .env
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    command: |-
+      bash -c "\
+      pip install --no-cache-dir -r requirements.txt && \
+      uvicorn twitterWebhook:app --host 0.0.0.0 --port 8000
+      "
+
+  scraper:
+    image: python:3.11-slim
+    container_name: tweet-scraper
+    restart: "no"
+    env_file: .env
+    working_dir: /app
+    volumes:
+      - ./:/app
+    depends_on:
+      - twitter-webhook
+    command: |-
+      bash -c "\
+      pip install --no-cache-dir -r requirements.txt && \
+      python driver.py
+      "
+
+volumes:
+  pgdata:
