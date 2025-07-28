@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 import aiohttp
+import json
 
 
 USERNAME = "your_proxy_username"
@@ -54,12 +55,12 @@ class Scraper:
             page = await browser.get(f"https://x.com/{TWITTER_USER}")
             
             print("⏳ Waiting for tweets to load...")
-
-            await browser.get(f"https://x.com/{TWITTER_USER}")
+            
+            await asyncio.sleep(5)            
             # Extract tweets
             await self.extract_tweets(page)
 
-            # Save cookies
+            # Save cookiestweet_id
             try:
                 await browser.cookies.save()
                 print("✅ Cookies saved.")
@@ -99,8 +100,9 @@ class Scraper:
         """Extract all tweets using span.text.strip()"""
         try:
             print("🔍 Looking for tweets...")
-            
             # Find tweet containers
+            await asyncio.sleep(5)            
+
             tweets = await page.select_all("article[data-testid='tweet']")
             if not tweets:
                 print("❌ No tweet containers found")
@@ -117,7 +119,7 @@ class Scraper:
                     
                     # Look for tweetText container
                     text_div = await tweet.query_selector("[data-testid='tweetText']")
-                    id  = await tweet.query_selector("id")
+                    id  =  text_div.attrs.get("id")
                     if not text_div:
                         print(f"⚠️ No tweetText container in tweet {i+1}")
                         continue
