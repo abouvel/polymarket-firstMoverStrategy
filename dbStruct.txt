@@ -9,3 +9,8 @@ Market ID: 0x290e8e125c5f8523f21500cc59c186f2c23762da51eec212c9dd956e5dabae3b
 Name: Yes
 Bid Price: (missing)
 Ask Price: (missing)
+
+TABLE BOUGHT 
+  TokenID   TEXT        PRIMARY KEY,
+  Tweet     TEXT        NOT NULL,
+  Date      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
