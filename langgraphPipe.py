@@ -231,15 +231,15 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         )
         market_row = cursor.fetchone()
         market_name = market_row[0] if market_row else "Unknown Market"
-
-        print(f"✅ Executing trade on token \"{token_name}\" from market \"{market_name}\"")
+        text = f" Executing trade on token \"{token_name}\" from market \"{market_name}\""
+        print(text)
         cursor.execute(
             """
-            INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline)
-            VALUES (%s, %s, %s)
+            INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline, Event)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (TokenID) DO NOTHING
             """,
-            (token_id, headline, buffHeadline)  # ← swapped here
+            (token_id, headline, buffHeadline, text)  # ← swapped here
         )
 
         cursor.close()
