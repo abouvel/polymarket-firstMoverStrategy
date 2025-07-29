@@ -1,199 +1,161 @@
 import nodriver as uc
+from nodriver.cdp.page import FrameStoppedLoading
+from nodriver.core.connection import ProtocolException
 import asyncio
-import os
-import sys
 import aiohttp
 import json
-import requests
-
 
 USERNAME = "your_proxy_username"
 PASSWORD = "your_proxy_password"
-TWITTER_USER = "ABouvel16870"
+LOGGED_IN_USER = "ABouvel16870"
+MONITORED_USERS = ["ABouvel16870", "elonmusk", "unusual_whales"]
 WEBHOOK_URL = "http://localhost:8000"
+POLL_INTERVAL = 30  # seconds
 
-class Scraper:
-    main_tab: uc.Tab
-    def __init__(self):
+class TwitterTabMonitor:
+    def __init__(self, browser, user):
+        self.browser = browser
+        self.user = user
+        self.tab = None
+
+    async def get_tab(self,tab, url):
         try:
-            uc.loop().run_until_complete(self.run())
-        except Exception as e:
-            print(f"❌ Fatal error: {e}")
-            sys.exit(1)
-
-    async def run(self):
-        browser = None
-        try:
-            print("🚀 Starting browser...")
-            
-            # Use the working config 3
-            browser = await uc.start(
-                browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
-                headless=True,
-                no_sandbox=True
-            )
-            
-            print("✅ Browser started successfully")
-
-            # Get the main tab
-            self.main_tab = await browser.get("draft:,")
-            
-            # Set up handlers
-            self.main_tab.add_handler(uc.cdp.fetch.RequestPaused, self.req_paused)
-            self.main_tab.add_handler(uc.cdp.fetch.AuthRequired, self.auth_challenge_handler)
-            await self.main_tab.send(uc.cdp.fetch.enable(handle_auth_requests=True))
-
-            # Load cookies
-            try:
-                await browser.cookies.load()
-                print("✅ Cookies loaded.")
-            except FileNotFoundError:
-                print("⚠️ No cookies found.")
-
-            # Navigate to Twitter
-            print(f"📱 Navigating to https://x.com/{TWITTER_USER}")
-            page = await browser.get(f"https://x.com/{TWITTER_USER}")
-            
-            print("⏳ Waiting for tweets to load...")
-            
-            await asyncio.sleep(5)            
-            # Extract tweets
-            await self.extract_tweets(page)
-
-            # Save cookiestweet_id
-            try:
-                await browser.cookies.save()
-                print("✅ Cookies saved.")
-            except Exception as e:
-                print(f"⚠️ Failed to save cookies: {e}")
-
-        except Exception as e:
-            print(f"❌ Error in main execution: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        finally:
-            if browser:
-                try:
-                    await asyncio.sleep(2)
-                    browser.stop()
-                    print("✅ Browser closed successfully")
-                except Exception as e:
-                    print(f"⚠️ Error closing browser: {e}")
-
-    async def send_webhook(self, tweet_id: str, tweet_text: str, username: str):
-        """POST tweet data to webhook"""
-        payload = {
-            "username": username,
-            "tweet_id": tweet_id,
-            "tweet_text": tweet_text,
-            "url": f"https://x.com/{username}/status/{tweet_id}"
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{WEBHOOK_URL}/recieve", json=payload, timeout=60) as resp:
-                    print(f"✅ Webhook sent for @{username} ({tweet_id}): {resp.status}")
-        except Exception as e:
-            print(f"❌ Webhook error for @{username} ({tweet_id}): {e}")
-
-    async def extract_tweets(self, page):
-        """Extract all tweets using span.text.strip()"""
-        try:
-            print("🔍 Looking for tweets...")
-            # Find tweet containers
-            await asyncio.sleep(5)            
-
-            tweets = await page.select_all("article[data-testid='tweet']")
-            if not tweets:
-                print("❌ No tweet containers found")
+            print(f"moving to{url} ")
+            return await tab.get(url)
+        except KeyError as e:
+            print(f"couldn't load{url}")
+            # nodriver tried to remove a handler for FrameStoppedLoading that wasn't there
+            if e.args and e.args[0] is FrameStoppedLoading:
                 return
+            raise
+    async def setup(self):
+        # open a fresh tab and enable fetch handling
+        self.tab = await self.browser.get("draft:,")
+        self.tab.add_handler(uc.cdp.fetch.RequestPaused, self._req_paused)
+        self.tab.add_handler(uc.cdp.fetch.AuthRequired, self._auth_challenge)
+        await self.tab.send(uc.cdp.fetch.enable(handle_auth_requests=True))
 
-            print(f"✅ Found {len(tweets)} tweet containers")
-            
-            extracted_count = 0
-            
-            # Process all tweets
-            tweet = tweets[0]
-           
-            try:
-                print(f"\n--- Processing Tweet {i+1} ---")
-                
-                # Look for tweetText container
-                text_div = await tweet.query_selector("[data-testid='tweetText']")
-                id  =  text_div.attrs.get("id")
-                if not text_div:
-                    print(f"⚠️ No tweetText container in tweet {i+1}")
-                    
-                
-                # Get all spans in the tweetText
-                spans = await text_div.query_selector_all("span")
-                print(f"Found {len(spans)} spans")
-                
-                tweet_parts = []
-                
-                for j, span in enumerate(spans):
-                    try:
-                        # Use span.text.strip() - simple and direct
-                        text = span.text.strip()
-                        
-                        if text and len(text) > 1:  # Only keep non-empty text
-                            tweet_parts.append(text)
-                            print(f"  Span {j+1}: '{text}'")
-                    
-                    except Exception as span_error:
-                        print(f"  Error with span {j+1}: {span_error}")
-                        continue
-                
-                # Combine all text parts
-                if tweet_parts:
-                    full_tweet = " ".join(tweet_parts)
-                    await self.send_webhook(id, full_tweet,TWITTER_USER)
-                    print(f"✅ Tweet: {full_tweet}")
-                    extracted_count += 1
-                else:
-                    print(f"⚠️ No text found in tweet")
-                    
-            except Exception as e:
-                print(f"⚠️ Error processing tweet: {e}")
-
+        # visit logged-in account to load cookies, then target profile
         
-            print(f"\n🎯 Successfully extracted {extracted_count} tweets out of {len(tweets)} total")
+        await self.get_tab(self.tab, f"https://x.com/{self.user}")
+        await asyncio.sleep(3)
 
-        except Exception as e:
-            print(f"❌ Error in extract_tweets: {e}")
-            import traceback
-            traceback.print_exc()
+    async def poll(self):
+        while True:
+            await asyncio.sleep(3)
 
-    async def auth_challenge_handler(self, event: uc.cdp.fetch.AuthRequired):
-        """Handle proxy authentication"""
-        try:
-            asyncio.create_task(
-                self.main_tab.send(
-                    uc.cdp.fetch.continue_with_auth(
-                        request_id=event.request_id,
-                        auth_challenge_response=uc.cdp.fetch.AuthChallengeResponse(
-                            response="ProvideCredentials",
-                            username=USERNAME,
-                            password=PASSWORD,
-                        ),
-                    )
+            await self._extract_and_send()
+            await asyncio.sleep(POLL_INTERVAL)
+
+    async def _extract_and_send(self):
+    # reload the profile once
+        await self.tab.get(f"https://x.com/{self.user}")
+        await asyncio.sleep(3)
+
+        js = f"""
+        (() => {{
+        const els = Array.from(
+            document.querySelectorAll("article[data-testid='tweet']")
+        ).slice(0, 3);
+
+        return els
+            .map(el => {{
+            const td = el.querySelector("[data-testid='tweetText']");
+            if (!td) return null;
+            const text = Array.from(td.querySelectorAll("span"))
+                .map(s => s.textContent.trim())
+                .filter(t => t)
+                .join(" ");
+            return td.id && text ? {{ id: td.id, text }} : null;
+            }})
+            .filter(x => x);
+        }})()
+        """
+
+        # evaluate the JS and get a Python list back
+        raw = await self.tab.evaluate(js, return_by_value=True)
+# If it’s still a RemoteObject, extract the deep value
+        if not isinstance(raw, list) and hasattr(raw, "deep_serialized_value"):
+            raw = raw.deep_serialized_value.value or []
+
+        if not isinstance(raw, list) or not raw:
+            print(f"⚠️ @{self.user}: no tweets extracted (raw={raw})")
+            return
+        clean = []
+        for obj in raw:
+            # obj['value'] is a list of [key, desc] pairs
+            entry = { key: desc['value'] for key, desc in obj['value'] }
+            # entry now is {'id': 'id__bkd5qzqsc5b', 'text': 'Next I’m buying Coca-Cola…'}
+            clean.append(entry)
+
+        # `clean` is now a list of simple dicts:
+        # [
+        #   {
+        #     'id': 'id__bkd5qzqsc5b',
+        #     'text': 'Next I’m buying Coca-Cola…'
+        #   }
+        # ]
+
+        # You can iterate:
+        for t in clean:
+            print(t['id'], ",", t['text'], self.user)
+        # send each tweet
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{WEBHOOK_URL}/receive",
+                    json={
+                        "username":   self.user,
+                        "tweet_id":   t["id"],
+                        "tweet_text": t["text"],
+                        "url":        f"https://x.com/{self.user}/status/{t['id']}"
+                    },
+                    timeout=30
                 )
-            )
-        except Exception as e:
-            print(f"❌ Auth challenge error: {e}")
 
-    async def req_paused(self, event: uc.cdp.fetch.RequestPaused):
-        """Handle paused requests"""
-        try:
-            asyncio.create_task(
-                self.main_tab.send(
-                    uc.cdp.fetch.continue_request(request_id=event.request_id)
-                )
+        print(f"✅ @{self.user} → sent {len(raw)} tweets")
+
+
+
+
+    async def _auth_challenge(self, event):
+        await self.tab.send(uc.cdp.fetch.continue_with_auth(
+            request_id=event.request_id,
+            auth_challenge_response=uc.cdp.fetch.AuthChallengeResponse(
+                response="ProvideCredentials",
+                username=USERNAME,
+                password=PASSWORD
             )
-        except Exception as e:
-            print(f"❌ Request pause error: {e}")
+        ))
+
+    async def _req_paused(self, event):
+        try:
+            await self.tab.send(uc.cdp.fetch.continue_request(request_id=event.request_id))
+        except:
+            pass  # ignore invalid‑state errors
+
+async def main():
+    browser = await uc.start(
+        browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
+        headless=False, no_sandbox=True
+    )
+    try:
+        await browser.cookies.load()
+        print("✅ Cookies loaded, skipping manual login")
+    except FileNotFoundError:
+        print("⚠️ No cookies found, logging in now")
+
+    # launch one monitor per user
+    monitors = []
+    for u in MONITORED_USERS:
+        m = TwitterTabMonitor(browser, u)
+        await m.setup()
+        monitors.append(asyncio.create_task(m.poll()))
+
+    await asyncio.gather(*monitors)
+    
+    
 
     
+
 if __name__ == "__main__":
-    print("🚀 Starting Twitter scraper...")
-    Scraper()
+    asyncio.run(main())
