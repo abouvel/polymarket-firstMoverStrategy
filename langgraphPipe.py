@@ -194,7 +194,7 @@ Respond with just the number: 1 or 2.
 
 
 
-def execute_trade_on_token(token_id: str):
+def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
     load_dotenv()
     try:
         conn = psycopg2.connect(
@@ -233,6 +233,14 @@ def execute_trade_on_token(token_id: str):
         market_name = market_row[0] if market_row else "Unknown Market"
 
         print(f"✅ Executing trade on token \"{token_name}\" from market \"{market_name}\"")
+        cursor.execute(
+            """
+            INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (TokenID) DO NOTHING
+            """,
+            (token_id, headline, buffHeadline)  # ← swapped here
+        )
 
         cursor.close()
         conn.close()
@@ -293,8 +301,9 @@ def get_token_to_trade(state: GraphState):
 # 💸 STEP 5: Trade
 
 def trade_step(state: GraphState):
-    execute_trade_on_token(state["token_id"])
+    execute_trade_on_token(state["token_id"],state["headline"], state["enriched_headline"])
     return {}
+
 
 # 🧱 LANGGRAPH CONSTRUCTION
 workflow = StateGraph(GraphState)

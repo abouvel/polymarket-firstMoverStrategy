@@ -136,7 +136,7 @@ class TwitterTabMonitor:
 async def main():
     browser = await uc.start(
         browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
-        headless=False, no_sandbox=True
+        headless=True, no_sandbox=True
     )
     try:
         await browser.cookies.load()
