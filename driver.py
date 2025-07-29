@@ -4,16 +4,16 @@ import os
 import sys
 import aiohttp
 import json
+import requests
 
 
 USERNAME = "your_proxy_username"
 PASSWORD = "your_proxy_password"
 TWITTER_USER = "ABouvel16870"
-WEBHOOK_URL = "http://localhost:8000/receive"
+WEBHOOK_URL = "http://localhost:8000"
 
 class Scraper:
     main_tab: uc.Tab
-
     def __init__(self):
         try:
             uc.loop().run_until_complete(self.run())
@@ -91,7 +91,7 @@ class Scraper:
         }
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(WEBHOOK_URL, json=payload, timeout=60) as resp:
+                async with session.post(f"{WEBHOOK_URL}/recieve", json=payload, timeout=60) as resp:
                     print(f"✅ Webhook sent for @{username} ({tweet_id}): {resp.status}")
         except Exception as e:
             print(f"❌ Webhook error for @{username} ({tweet_id}): {e}")
@@ -113,50 +113,50 @@ class Scraper:
             extracted_count = 0
             
             # Process all tweets
-            for i, tweet in enumerate(tweets):
-                try:
-                    print(f"\n--- Processing Tweet {i+1} ---")
+            tweet = tweets[0]
+           
+            try:
+                print(f"\n--- Processing Tweet {i+1} ---")
+                
+                # Look for tweetText container
+                text_div = await tweet.query_selector("[data-testid='tweetText']")
+                id  =  text_div.attrs.get("id")
+                if not text_div:
+                    print(f"⚠️ No tweetText container in tweet {i+1}")
                     
-                    # Look for tweetText container
-                    text_div = await tweet.query_selector("[data-testid='tweetText']")
-                    id  =  text_div.attrs.get("id")
-                    if not text_div:
-                        print(f"⚠️ No tweetText container in tweet {i+1}")
+                
+                # Get all spans in the tweetText
+                spans = await text_div.query_selector_all("span")
+                print(f"Found {len(spans)} spans")
+                
+                tweet_parts = []
+                
+                for j, span in enumerate(spans):
+                    try:
+                        # Use span.text.strip() - simple and direct
+                        text = span.text.strip()
+                        
+                        if text and len(text) > 1:  # Only keep non-empty text
+                            tweet_parts.append(text)
+                            print(f"  Span {j+1}: '{text}'")
+                    
+                    except Exception as span_error:
+                        print(f"  Error with span {j+1}: {span_error}")
                         continue
+                
+                # Combine all text parts
+                if tweet_parts:
+                    full_tweet = " ".join(tweet_parts)
+                    await self.send_webhook(id, full_tweet,TWITTER_USER)
+                    print(f"✅ Tweet: {full_tweet}")
+                    extracted_count += 1
+                else:
+                    print(f"⚠️ No text found in tweet")
                     
-                    # Get all spans in the tweetText
-                    spans = await text_div.query_selector_all("span")
-                    print(f"Found {len(spans)} spans")
-                    
-                    tweet_parts = []
-                    
-                    for j, span in enumerate(spans):
-                        try:
-                            # Use span.text.strip() - simple and direct
-                            text = span.text.strip()
-                            
-                            if text and len(text) > 1:  # Only keep non-empty text
-                                tweet_parts.append(text)
-                                print(f"  Span {j+1}: '{text}'")
-                        
-                        except Exception as span_error:
-                            print(f"  Error with span {j+1}: {span_error}")
-                            continue
-                    
-                    # Combine all text parts
-                    if tweet_parts:
-                        full_tweet = " ".join(tweet_parts)
-                        await self.send_webhook(id, full_tweet,TWITTER_USER)
-                        break
-                        print(f"✅ Tweet {i+1}: {full_tweet}")
-                        extracted_count += 1
-                    else:
-                        print(f"⚠️ No text found in tweet {i+1}")
-                        
-                except Exception as e:
-                    print(f"⚠️ Error processing tweet {i+1}: {e}")
-                    continue
-            
+            except Exception as e:
+                print(f"⚠️ Error processing tweet: {e}")
+
+        
             print(f"\n🎯 Successfully extracted {extracted_count} tweets out of {len(tweets)} total")
 
         except Exception as e:

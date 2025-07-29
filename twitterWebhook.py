@@ -23,7 +23,13 @@ collection = client.get_or_create_collection(name="tweets")
 polymarketCollection = client.get_or_create_collection(name="events")
 
 
+
+
 app = FastAPI()
+
+@app.get("/db")
+def db():
+    return collection
 
 @app.post("/poly")
 async def push_markets(request: Request):
@@ -82,18 +88,20 @@ async def receive_tweet(request: Request):
         return {"error": "No tweet text provided"}
 
     tweet_id = data.get("tweet_id")
-
-    collection.add(
-        documents=[tweet_text],
-        metadatas=[{
-            "username": username,
-            "url": tweet_url
-        }],
-        ids=[tweet_id]
-    )
-
-    print(f"✅ Stored tweet from @{username}")
-    print(f"tweet id: {tweet_id}")
+    existing = collection.get(ids=[tweet_id])
+    if not existing['ids']:
+        collection.add(
+            documents=[tweet_text],
+            metadatas=[{
+                "username": username,
+                "url": tweet_url
+            }],
+            ids=[tweet_id]
+        )
+        print(f"✅ Stored tweet from @{username}")
+        print(f"tweet id: {tweet_id}")
+    else:
+        print("tweet already stored")
 
 
     runcom(tweet_text)
