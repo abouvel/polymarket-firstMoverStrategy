@@ -241,7 +241,7 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
             """,
             (token_id, headline, buffHeadline, text)  # ← swapped here
         )
-
+        conn.commit()
         cursor.close()
         conn.close()
 
