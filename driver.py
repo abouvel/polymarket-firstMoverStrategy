@@ -4,12 +4,13 @@ from nodriver.core.connection import ProtocolException
 import asyncio
 import aiohttp
 import json
+import os
 
 USERNAME = "your_proxy_username"
 PASSWORD = "your_proxy_password"
 LOGGED_IN_USER = "ABouvel16870"
 MONITORED_USERS = ["ABouvel16870", "elonmusk", "unusual_whales"]
-WEBHOOK_URL = "http://localhost:8000"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "http://localhost:8000")
 POLL_INTERVAL = 10  # seconds
 
 # Global set to track processed tweet IDs
@@ -189,8 +190,11 @@ async def main():
     await load_existing_tweet_ids()
     
     browser = await uc.start(
+        browser_executable_path="/usr/bin/chromium",
         browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
-        headless=False, no_sandbox=True
+        headless=True, 
+        no_sandbox=True,
+        sandbox=False
     )
     try:
         await browser.cookies.load()

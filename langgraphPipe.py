@@ -6,7 +6,7 @@ from langchain_core.runnables import Runnable
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.tools.tavily_search.tool import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_community.llms import Ollama
 from langchain_ollama import ChatOllama
 
@@ -21,7 +21,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 import requests
 
 # --- Core Components ---
-url = "http://localhost:8000"
+url = os.getenv("WEBHOOK_URL", "http://localhost:8000")
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -34,7 +34,7 @@ vectorstore = Chroma(
 )
 load_dotenv()
 llm = ChatOllama(model="llama3.2:latest",temperature=0)  # Replace with actual model like "llama3-instruct"
-search = TavilySearchResults(tavily_api_key=tavily_api_key)
+search = TavilySearch(api_key=tavily_api_key)
 
 
 
@@ -133,6 +133,7 @@ def get_market_tokens(market_id: str):
     load_dotenv()
 
     try:
+        print(f"🔗 [get_market_tokens] Connecting to PostgreSQL at {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}")
         conn = psycopg2.connect(
             user=os.getenv("POSTGRES_USER"),
             password=os.getenv("POSTGRES_PASSWORD"),
@@ -140,6 +141,7 @@ def get_market_tokens(market_id: str):
             port=os.getenv("POSTGRES_PORT"),
             dbname=os.getenv("POSTGRES_DB")
         )
+        print("✅ [get_market_tokens] PostgreSQL connection successful")
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -156,7 +158,9 @@ def get_market_tokens(market_id: str):
         conn.close()
         return tokens
     except Exception as e:
-        print(f"❌ Error fetching tokens: {e}")
+        print(f"❌ [get_market_tokens] Error fetching tokens: {e}")
+        print(f"🔍 [get_market_tokens] Error type: {type(e).__name__}")
+        print(f"📊 [get_market_tokens] Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
         return []
 
 def decide_token_to_trade(structured_output, question,tokens):
@@ -197,6 +201,7 @@ Respond with just the number: 1 or 2.
 def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
     load_dotenv()
     try:
+        print(f"🔗 [execute_trade_on_token] Connecting to PostgreSQL at {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}")
         conn = psycopg2.connect(
             user=os.getenv("POSTGRES_USER"),
             password=os.getenv("POSTGRES_PASSWORD"),
@@ -204,6 +209,7 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
             port=os.getenv("POSTGRES_PORT"),
             dbname=os.getenv("POSTGRES_DB")
         )
+        print("✅ [execute_trade_on_token] PostgreSQL connection successful")
         cursor = conn.cursor()
 
         # Fetch token name and market ID
@@ -246,7 +252,9 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         conn.close()
 
     except Exception as e:
-        print(f"❌ Error during trade execution: {e}")
+        print(f"❌ [execute_trade_on_token] Error during trade execution: {e}")
+        print(f"🔍 [execute_trade_on_token] Error type: {type(e).__name__}")
+        print(f"📊 [execute_trade_on_token] Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
 
 
 # 🔁 STATE

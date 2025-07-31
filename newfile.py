@@ -213,7 +213,7 @@ async def process_market_batch(markets, conn, clob_client):
             # """, market_data)
 
             # Push each market to the /poly endpoint
-            poly_url = "http://localhost:8000/poly"
+            poly_url = os.getenv("WEBHOOK_URL", "http://localhost:8000") + "/poly"
             async with httpx.AsyncClient(timeout=10.0) as client:
                 for market_id, market_name, _ in market_data:
                     try:
