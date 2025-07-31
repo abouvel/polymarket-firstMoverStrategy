@@ -17,6 +17,11 @@ services:
       - backend_pgdata:/var/lib/postgresql/data
     ports:
       - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   ollama:
     image: ollama/ollama:latest
@@ -28,56 +33,55 @@ services:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   twitter-webhook:
-    image: python:3.11-slim
+    image: polyai-app
     container_name: twitter-webhook
     restart: always
     env_file: .env
-    working_dir: /app
     volumes:
       - ./:/app
       - huggingface_cache:/root/.cache/huggingface
+      - pip_cache:/root/.cache/pip
     ports:
       - "8000:8000"
     environment:
       - HF_HOME=/root/.cache/huggingface
+      - PIP_CACHE_DIR=/root/.cache/pip
     depends_on:
-      - postgres
-      - ollama
-    stop_signal: SIGTERM
-    stop_grace_period: 10s
-    command: |-
-      bash -c "\
-      trap 'echo Shutting down...; exit 0' SIGTERM SIGINT && \
-      apt-get update && apt-get install -y git && \
-      pip install --no-cache-dir -r requirements.txt && \
-      python -c 'from langchain.embeddings import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_name=\"all-MiniLM-L6-v2\")' && \
-      uvicorn twitterWebhook:app --host 0.0.0.0 --port 8000 --reload
-      "
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    command: uvicorn twitterWebhook:app --host 0.0.0.0 --port 8000 --reload
 
   driver:
-    image: python:3.11-slim
+    image: polyai-app
     container_name: driver-service
     restart: always
     env_file: .env
-    working_dir: /app
     volumes:
       - ./:/app
       - huggingface_cache:/root/.cache/huggingface
+      - pip_cache:/root/.cache/pip
     environment:
       - HF_HOME=/root/.cache/huggingface
+      - PIP_CACHE_DIR=/root/.cache/pip
+      - WEBHOOK_URL=http://twitter-webhook:8000
     depends_on:
-      - twitter-webhook
-      - postgres
-      - ollama
-    stop_signal: SIGTERM
-    stop_grace_period: 10s
+      twitter-webhook:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     command: |-
       bash -c "\
-      trap 'echo Shutting down driver...; exit 0' SIGTERM SIGINT && \
-      apt-get update && apt-get install -y git && \
-      pip install --no-cache-dir -r requirements.txt && \
       sleep 10 && \
       python driver.py
       "
@@ -87,3 +91,4 @@ volumes:
     external: true
   ollama_data:
   huggingface_cache:
+  pip_cache:

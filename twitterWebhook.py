@@ -118,7 +118,15 @@ async def receive_tweet(request: Request):
         print(f"tweet id: {tweet_id}")
         
         # Only run AI pipeline for new tweets
-        runcom(tweet_text)
+        try:
+            print("🚀 Running LangGraph...")
+            runcom(tweet_text)
+            print("✅ LangGraph pipeline completed successfully")
+        except Exception as langgraph_error:
+            print(f"❌ LangGraph pipeline failed: {langgraph_error}")
+            print(f"🔍 Error type: {type(langgraph_error).__name__}")
+            # Don't fail the entire request - tweet is already stored
+        
         return {"status": "stored", "tweet_id": tweet_id}
         
     except Exception as e:
