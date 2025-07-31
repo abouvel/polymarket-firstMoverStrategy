@@ -31,6 +31,16 @@ app = FastAPI()
 def db():
     return collection
 
+@app.get("/tweet-ids")
+def get_tweet_ids():
+    """Get all existing tweet IDs from ChromaDB"""
+    try:
+        result = collection.get()
+        return {"tweet_ids": result["ids"] or []}
+    except Exception as e:
+        print(f"❌ Error getting tweet IDs: {e}")
+        return {"tweet_ids": []}
+
 @app.post("/poly")
 async def push_markets(request: Request):
     data = await request.json()
@@ -78,18 +88,24 @@ async def connect():
 
 @app.post("/receive")
 async def receive_tweet(request: Request):
-    print("tweet recieved")
+    print("tweet received")
     data = await request.json()
     tweet_text = data.get("tweet_text")
     tweet_url = data.get("url")
     username = data.get("username")
-
-    if not tweet_text:
-        return {"error": "No tweet text provided"}
-
     tweet_id = data.get("tweet_id")
-    existing = collection.get(ids=[tweet_id])
-    if not existing['ids']:
+
+    if not tweet_text or not tweet_id:
+        return {"error": "Missing tweet_text or tweet_id"}
+
+    try:
+        # Check if tweet already exists
+        existing = collection.get(ids=[tweet_id])
+        if existing['ids']:
+            print(f"⚠️ Tweet {tweet_id} already stored, skipping")
+            return {"status": "already_exists", "tweet_id": tweet_id}
+        
+        # Try to add tweet - ChromaDB will handle duplicates gracefully
         collection.add(
             documents=[tweet_text],
             metadatas=[{
@@ -100,8 +116,16 @@ async def receive_tweet(request: Request):
         )
         print(f"✅ Stored tweet from @{username}")
         print(f"tweet id: {tweet_id}")
-    else:
-        print("tweet already stored")
-
-
-    runcom(tweet_text)
+        
+        # Only run AI pipeline for new tweets
+        runcom(tweet_text)
+        return {"status": "stored", "tweet_id": tweet_id}
+        
+    except Exception as e:
+        # Handle ChromaDB duplicate errors gracefully
+        if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+            print(f"⚠️ Tweet {tweet_id} already exists (caught exception)")
+            return {"status": "already_exists", "tweet_id": tweet_id}
+        else:
+            print(f"❌ Error storing tweet: {e}")
+            return {"error": f"Failed to store tweet: {str(e)}"}

@@ -10,7 +10,28 @@ PASSWORD = "your_proxy_password"
 LOGGED_IN_USER = "ABouvel16870"
 MONITORED_USERS = ["ABouvel16870", "elonmusk", "unusual_whales"]
 WEBHOOK_URL = "http://localhost:8000"
-POLL_INTERVAL = 30  # seconds
+POLL_INTERVAL = 10  # seconds
+
+# Global set to track processed tweet IDs
+processed_tweet_ids = set()
+
+async def load_existing_tweet_ids():
+    """Load existing tweet IDs from ChromaDB via webhook API"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{WEBHOOK_URL}/tweet-ids", timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    existing_ids = data.get("tweet_ids", [])
+                    processed_tweet_ids.update(existing_ids)
+                    print(f"✅ Loaded {len(existing_ids)} existing tweet IDs from ChromaDB")
+                    return len(existing_ids)
+                else:
+                    print(f"⚠️ Failed to load existing tweet IDs: HTTP {response.status}")
+                    return 0
+    except Exception as e:
+        print(f"❌ Error loading existing tweet IDs: {e}")
+        return 0
 
 class TwitterTabMonitor:
     def __init__(self, browser, user):
@@ -96,23 +117,52 @@ class TwitterTabMonitor:
         #   }
         # ]
 
-        # You can iterate:
-        for t in clean:
-            print(t['id'], ",", t['text'], self.user)
-        # send each tweet
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"{WEBHOOK_URL}/receive",
-                    json={
-                        "username":   self.user,
-                        "tweet_id":   t["id"],
-                        "tweet_text": t["text"],
-                        "url":        f"https://x.com/{self.user}/status/{t['id']}"
-                    },
-                    timeout=30
+        # Filter out already processed tweets and send new ones
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            new_tweets = []
+            
+            for t in clean:
+                tweet_id = t['id']
+                
+                # Check local cache first
+                if tweet_id in processed_tweet_ids:
+                    print(f"⚠️ Skipping already processed tweet: {tweet_id}")
+                    continue
+                
+                # Add to local cache immediately to prevent race conditions
+                processed_tweet_ids.add(tweet_id)
+                new_tweets.append(t)
+                
+                print(f"🆕 New tweet: {tweet_id}, {t['text'][:50]}..., @{self.user}")
+                tasks.append(
+                    session.post(
+                        f"{WEBHOOK_URL}/receive",
+                        json={
+                            "username":   self.user,
+                            "tweet_id":   tweet_id,
+                            "tweet_text": t["text"],
+                            "url":        f"https://x.com/{self.user}/status/{tweet_id}"
+                        },
+                        timeout=30
+                    )
                 )
-
-        print(f"✅ @{self.user} → sent {len(raw)} tweets")
+            
+            if not tasks:
+                print(f"📭 No new tweets found for @{self.user}")
+                return []
+            
+            # Run all requests concurrently
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Handle failed requests by removing from local cache
+            for i, response in enumerate(responses):
+                if isinstance(response, Exception):
+                    failed_tweet_id = new_tweets[i]['id']
+                    processed_tweet_ids.discard(failed_tweet_id)
+                    print(f"❌ Failed to send tweet {failed_tweet_id}: {response}")
+                
+            return responses
 
 
 
@@ -134,9 +184,13 @@ class TwitterTabMonitor:
             pass  # ignore invalid‑state errors
 
 async def main():
+    # Load existing tweet IDs from ChromaDB at startup
+    print("🔄 Loading existing tweet IDs from ChromaDB...")
+    await load_existing_tweet_ids()
+    
     browser = await uc.start(
         browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
-        headless=True, no_sandbox=True
+        headless=False, no_sandbox=True
     )
     try:
         await browser.cookies.load()

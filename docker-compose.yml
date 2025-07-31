@@ -18,6 +18,17 @@ services:
     ports:
       - "${POSTGRES_PORT}:5432"
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-serve
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+
   twitter-webhook:
     image: python:3.11-slim
     container_name: twitter-webhook
@@ -26,32 +37,53 @@ services:
     working_dir: /app
     volumes:
       - ./:/app
+      - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8000:8000"
+    environment:
+      - HF_HOME=/root/.cache/huggingface
     depends_on:
       - postgres
+      - ollama
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
     command: |-
       bash -c "\
+      trap 'echo Shutting down...; exit 0' SIGTERM SIGINT && \
+      apt-get update && apt-get install -y git && \
       pip install --no-cache-dir -r requirements.txt && \
-      uvicorn twitterWebhook:app --host 0.0.0.0 --port 8000
+      python -c 'from langchain.embeddings import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_name=\"all-MiniLM-L6-v2\")' && \
+      uvicorn twitterWebhook:app --host 0.0.0.0 --port 8000 --reload
       "
 
-  scraper:
+  driver:
     image: python:3.11-slim
-    container_name: tweet-scraper
-    restart: "no"
+    container_name: driver-service
+    restart: always
     env_file: .env
     working_dir: /app
     volumes:
       - ./:/app
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      - HF_HOME=/root/.cache/huggingface
     depends_on:
       - twitter-webhook
+      - postgres
+      - ollama
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
     command: |-
       bash -c "\
+      trap 'echo Shutting down driver...; exit 0' SIGTERM SIGINT && \
+      apt-get update && apt-get install -y git && \
       pip install --no-cache-dir -r requirements.txt && \
+      sleep 10 && \
       python driver.py
       "
 
 volumes:
   backend_pgdata:
     external: true
+  ollama_data:
+  huggingface_cache:
