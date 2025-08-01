@@ -24,6 +24,24 @@ import requests
 url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
+# --- Database Helper Functions ---
+def get_db_connection():
+    """Create and return a PostgreSQL database connection"""
+    load_dotenv()
+    try:
+        conn = psycopg2.connect(
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            host=os.getenv("POSTGRES_HOST"),
+            port=os.getenv("POSTGRES_PORT"),
+            dbname=os.getenv("POSTGRES_DB")
+        )
+        return conn
+    except Exception as e:
+        print(f"❌ Database connection error: {e}")
+        print(f"🔍 Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
+        raise
+
 tavily_api_key = os.getenv("TAVILY_API_KEY")
 # ✅ Ensure path and collection match FastAPI setup
 chroma_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma")
@@ -133,19 +151,11 @@ Now, rewrite this as a clear, neutral sentence suitable for internal analysis. A
 
 
 def get_market_tokens(market_id: str):
-    
-    load_dotenv()
-
     try:
-        print(f"🔗 [get_market_tokens] Connecting to PostgreSQL at {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}")
-        conn = psycopg2.connect(
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host=os.getenv("POSTGRES_HOST"),
-            port=os.getenv("POSTGRES_PORT"),
-            dbname=os.getenv("POSTGRES_DB")
-        )
+        print(f"🔗 [get_market_tokens] Connecting to PostgreSQL")
+        conn = get_db_connection()
         print("✅ [get_market_tokens] PostgreSQL connection successful")
+        
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -164,7 +174,6 @@ def get_market_tokens(market_id: str):
     except Exception as e:
         print(f"❌ [get_market_tokens] Error fetching tokens: {e}")
         print(f"🔍 [get_market_tokens] Error type: {type(e).__name__}")
-        print(f"📊 [get_market_tokens] Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
         return []
 
 def decide_token_to_trade(structured_output, question,tokens):
@@ -203,17 +212,11 @@ Respond with just the number: 1 or 2.
 
 
 def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
-    load_dotenv()
     try:
-        print(f"🔗 [execute_trade_on_token] Connecting to PostgreSQL at {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}")
-        conn = psycopg2.connect(
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host=os.getenv("POSTGRES_HOST"),
-            port=os.getenv("POSTGRES_PORT"),
-            dbname=os.getenv("POSTGRES_DB")
-        )
+        print(f"🔗 [execute_trade_on_token] Connecting to PostgreSQL")
+        conn = get_db_connection()
         print("✅ [execute_trade_on_token] PostgreSQL connection successful")
+        
         cursor = conn.cursor()
 
         # Fetch token name and market ID
@@ -227,6 +230,8 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         token_row = cursor.fetchone()
         if not token_row:
             print(f"❌ Token with ID {token_id} not found.")
+            cursor.close()
+            conn.close()
             return
 
         token_name, market_id = token_row
@@ -243,13 +248,14 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         market_name = market_row[0] if market_row else "Unknown Market"
         text = f" Executing trade on token \"{token_name}\" from market \"{market_name}\""
         print(text)
+        
         cursor.execute(
             """
             INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline, Event)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (TokenID) DO NOTHING
             """,
-            (token_id, headline, buffHeadline, text)  # ← swapped here
+            (token_id, headline, buffHeadline, text)
         )
         conn.commit()
         cursor.close()
@@ -258,7 +264,6 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
     except Exception as e:
         print(f"❌ [execute_trade_on_token] Error during trade execution: {e}")
         print(f"🔍 [execute_trade_on_token] Error type: {type(e).__name__}")
-        print(f"📊 [execute_trade_on_token] Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
 
 
 # 🔁 STATE
@@ -310,10 +315,62 @@ def get_token_to_trade(state: GraphState):
     token_key = decide_token_to_trade(state["structured_output"],state["enriched_headline"], tokens)
     return {"token_id": token_key}
 
-# 💸 STEP 5: Trade
+# 🔍 STEP 5: Significance Check
+
+def check_significance(state: GraphState):
+    """Check if the tweet will significantly impact the market odds"""
+    tokens = get_market_tokens(state["selected_id"])
+    if len(tokens) < 2:
+        return "skip"
+    
+    # Get market name for context
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT title FROM markets WHERE id = %s", (state["selected_id"],))
+        market_row = cursor.fetchone()
+        market_name = market_row[0] if market_row else "Unknown Market"
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Error getting market name: {e}")
+        market_name = "Unknown Market"
+    
+    prompt = f"""
+You are an expert market analyst evaluating whether news will significantly impact prediction market odds.
+
+Tweet: "{state["headline"]}"
+Context: "{state["enriched_headline"]}"
+Market: "{market_name}"
+Reasoning from previous analysis: "{state["structured_output"].reasoning}"
+
+Will this tweet cause a SIGNIFICANT change in the market odds (>5% price movement)?
+
+Consider:
+- Is this breaking news or just speculation?
+- How directly does it relate to the market outcome?
+- Is this information already priced in?
+- Would traders immediately react to this news?
+
+Respond with exactly one word: "significant" or "insignificant"
+"""
+    
+    result = llm.invoke(prompt).content.strip().lower()
+    if "significant" in result:
+        return "execute"
+    else:
+        return "skip"
+
+# 💸 STEP 6: Trade
 
 def trade_step(state: GraphState):
     execute_trade_on_token(state["token_id"],state["headline"], state["enriched_headline"])
+    return {}
+
+# 🚫 STEP 6: Skip Trade
+
+def skip_trade_step(state: GraphState):
+    print(f"⏭️ Skipping trade - tweet not significant enough for market impact")
     return {}
 
 
@@ -324,13 +381,25 @@ workflow.add_node("embed_and_search", embed_and_search)
 workflow.add_node("decide_market", decide_market)
 workflow.add_node("get_token_to_trade", get_token_to_trade)
 workflow.add_node("trade_step", trade_step)
+workflow.add_node("skip_trade_step", skip_trade_step)
 
 workflow.set_entry_point("enrich_headline")
 workflow.add_edge("enrich_headline", "embed_and_search")
 workflow.add_edge("embed_and_search", "decide_market")
 workflow.add_edge("decide_market", "get_token_to_trade")
-workflow.add_edge("get_token_to_trade", "trade_step")
+
+# Add conditional edge for significance check
+workflow.add_conditional_edges(
+    "get_token_to_trade",
+    check_significance,
+    {
+        "execute": "trade_step",
+        "skip": "skip_trade_step"
+    }
+)
+
 workflow.add_edge("trade_step", END)
+workflow.add_edge("skip_trade_step", END)
 
 graph = workflow.compile()
 initial_state = {
