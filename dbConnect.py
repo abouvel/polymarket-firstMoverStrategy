@@ -39,6 +39,8 @@ async def create_tables_async(conn):
                 id TEXT PRIMARY KEY,
                 market_id TEXT NOT NULL,
                 name TEXT,
+                bid_price DECIMAL,
+                ask_price DECIMAL,
                 FOREIGN KEY (market_id) REFERENCES markets(id) ON DELETE CASCADE
             );
         """)
@@ -62,6 +64,8 @@ def create_markets_and_tokens_tables(conn):
                     id TEXT PRIMARY KEY,
                     market_id TEXT NOT NULL,
                     name TEXT,
+                    bid_price DECIMAL,
+                    ask_price DECIMAL,
                     FOREIGN KEY (market_id) REFERENCES markets(id) ON DELETE CASCADE
                 );
             """)

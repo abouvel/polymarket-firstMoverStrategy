@@ -21,7 +21,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 import requests
 
 # --- Core Components ---
-url = os.getenv("WEBHOOK_URL", "http://localhost:8000")
+url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -33,7 +33,11 @@ vectorstore = Chroma(
     embedding_function=embedding_model
 )
 load_dotenv()
-llm = ChatOllama(model="llama3.2:latest",temperature=0)  # Replace with actual model like "llama3-instruct"
+llm = ChatOllama(
+    model="llama3.2:latest",
+    temperature=0,
+    base_url="http://ollama:11434"  # Use Docker service name instead of localhost
+)
 search = TavilySearch(api_key=tavily_api_key)
 
 
