@@ -5,12 +5,13 @@ import asyncio
 import aiohttp
 import json
 import os
+from newfile import fetch_active_markets
 
 USERNAME = "your_proxy_username"
 PASSWORD = "your_proxy_password"
 LOGGED_IN_USER = "ABouvel16870"
 MONITORED_USERS = ["ABouvel16870", "elonmusk", "unusual_whales"]
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "http://localhost:8000")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
 POLL_INTERVAL = 10  # seconds
 
 # Global set to track processed tweet IDs
@@ -185,6 +186,14 @@ class TwitterTabMonitor:
             pass  # ignore invalid‑state errors
 
 async def main():
+    # Initialize database with all markets from Polymarket
+    print("🔄 Initializing database with Polymarket data...")
+    try:
+        result = await fetch_active_markets()
+        print(f"✅ Database initialization completed: {result}")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+    
     # Load existing tweet IDs from ChromaDB at startup
     print("🔄 Loading existing tweet IDs from ChromaDB...")
     await load_existing_tweet_ids()

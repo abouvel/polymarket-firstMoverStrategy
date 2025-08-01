@@ -14,6 +14,7 @@ from py_clob_client.clob_types import BookParams
 # Load environment variables
 load_dotenv()
 host = "https://clob.polymarket.com"
+gamma_host = "https://gamma-api.polymarket.com"
 
 def connect_clob_client():
     load_dotenv()
@@ -39,76 +40,161 @@ async def get_asyncpg_connection():
     config = get_db_config()
     return await asyncpg.connect(**config)
 
-async def fetch_active_markets(limit=None, batch_size=50, conn=None, clob_client=None):
-    """Fetch and return all active Polymarket markets. Optionally accept an existing DB connection."""
+async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, clob_client=None):
+    """Fetch active events using Gamma API with server-side filtering for better performance."""
+    print("🚀 Starting fetch_active_events_optimized...")
     stored = 0
     skipped = 0
     processed = 0
-    cursor_id = ""
     close_conn = False
-
+    
     # Use asyncpg for better async database performance
+    print("🔗 Setting up database connection...")
     if conn is None:
         conn = await get_asyncpg_connection()
         close_conn = True
+        print("✅ Database connection established")
     if clob_client is None:
         clob_client = connect_clob_client()
+        print("✅ CLOB client connected")
     
     # Create tables if they don't exist
+    print("🏗️ Creating database tables if they don't exist...")
     await create_tables_async(conn)
-
+    print("✅ Database tables ready")
+    
+    # Use Gamma API for better filtering - filter out expired events server-side
+    now = datetime.now(timezone.utc)
+    end_date_min = now.isoformat()
+    print(f"📅 Filtering events with end_date_min: {end_date_min}")
+    
+    params = {
+        'active': 'true',
+        'closed': 'false', 
+        'end_date_min': end_date_min,  # Only get events that haven't expired
+        'limit': batch_size,
+        'order': 'end_date',
+        'ascending': 'true'
+    }
+    
+    if limit:
+        params['limit'] = min(limit, batch_size)
+    
+    print(f"🔍 API parameters: {params}")
+    
     async with httpx.AsyncClient(timeout=30.0) as client:
+        offset = 0
         while True:
             try:
-                url = f"{host}/markets?active=true&closed=false&next_cursor={cursor_id}"
-                resp = await client.get(url)
+                params['offset'] = offset
+                url = f"{gamma_host}/events"
+                print(f"🌐 Making API request to: {url}")
+                resp = await client.get(url, params=params)
+                print(f"📡 API response status: {resp.status_code}")
                 resp.raise_for_status()
-
-                payload = resp.json()
-                markets = payload.get("data", [])
-
-                print(f"📦 Received {len(markets)} markets")
                 
-                # Process markets in batches for better performance
-                batch = []
-                for market in markets:
+                payload = resp.json()
+                events = payload.get("data", [])
+                
+                if not events:
+                    print("📭 No more events to process")
+                    break
+                
+                print(f"📦 Received {len(events)} active events (offset: {offset})")
+                print(f"🔍 Processing events...")
+                
+                # Convert events to market format and process concurrently
+                valid_events = []
+                for event in events:
                     processed += 1
-                    if not market.get("active", False):
+                    print(f"📋 Processing event {processed}: {event.get('title', 'Unknown')[:50]}...")
+                    
+                    # Server-side filtering should handle this, but double-check
+                    if not event.get('active', True) or event.get('closed', False):
+                        print(f"⚠️ Skipping inactive/closed event: {event.get('id')}")
                         skipped += 1
                         continue
-
-                    batch.append(market)
                     
-                    # Process batch when it reaches batch_size or at the end
-                    if len(batch) >= batch_size:
-                        batch_stored = await process_market_batch(batch, conn, clob_client)
-                        stored += batch_stored
-                        batch = []
-
+                    # Convert event to market-like structure
+                    market_data = {
+                        'condition_id': event.get('id'),
+                        'question': event.get('title', ''),
+                        'end_date_iso': event.get('end_date'),
+                        'active': event.get('active', True),
+                        'closed': event.get('closed', False),
+                        'tokens': []  # Will be populated via separate API calls
+                    }
+                    
+                    # Get markets for this event to populate tokens
+                    try:
+                        markets_url = f"{host}/markets"
+                        print(f"🎯 Fetching tokens for event: {event.get('id')}")
+                        markets_resp = await client.get(markets_url, params={'event_id': event.get('id')})
+                        if markets_resp.status_code == 200:
+                            markets_data = markets_resp.json()
+                            if markets_data.get('data'):
+                                # Use the first market's tokens (events usually have one market)
+                                first_market = markets_data['data'][0]
+                                market_data['tokens'] = first_market.get('tokens', [])
+                                print(f"✅ Found {len(market_data['tokens'])} tokens for event")
+                            else:
+                                print(f"⚠️ No market data found for event {event.get('id')}")
+                        else:
+                            print(f"⚠️ Markets API returned status {markets_resp.status_code} for event {event.get('id')}")
+                    except Exception as e:
+                        print(f"❌ Could not fetch tokens for event {event.get('id')}: {e}")
+                    
+                    valid_events.append(market_data)
+                    print(f"➕ Added event to valid_events list")
+                    
                     if limit and processed >= limit:
                         break
-
-                # Process remaining markets in the last batch
-                if batch:
-                    batch_stored = await process_market_batch(batch, conn, clob_client)
-                    stored += batch_stored
-
+                
+                # Process events concurrently in smaller batches
+                if valid_events:
+                    print(f"🚀 Processing {len(valid_events)} valid events...")
+                    # Process in parallel batches for better performance
+                    concurrent_batches = [valid_events[i:i+batch_size] for i in range(0, len(valid_events), batch_size)]
+                    print(f"📊 Split into {len(concurrent_batches)} batches for processing")
+                    batch_tasks = [process_market_batch(batch, conn, clob_client) for batch in concurrent_batches]
+                    batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                    
+                    for i, result in enumerate(batch_results):
+                        if isinstance(result, Exception):
+                            print(f"❌ Batch {i+1} processing error: {result}")
+                        else:
+                            print(f"✅ Batch {i+1} completed: {result} events processed")
+                            stored += result
+                else:
+                    print("⚠️ No valid events to process in this batch")
+                
                 if limit and processed >= limit:
                     break
-
-                cursor_id = payload.get("next_cursor", "")
-                if not cursor_id or cursor_id == "LTE=":
-                    break
-
+                
+                # Pagination - move to next batch
+                offset += len(events)
+                if len(events) < batch_size:
+                    break  # No more results
+                    
             except Exception as e:
-                print(f"❌ Error fetching markets: {e}")
+                print(f"❌ Error fetching events: {e}")
+                print(f"🔍 Exception details: {type(e).__name__}: {str(e)}")
                 break
-
+    
     if close_conn:
+        print("🔗 Closing database connection...")
         await conn.close()
-    print("\n📈 Summary:")
-    print(f"Processed: {processed}, Stored: {stored}, Skipped: {skipped}")
+        print("✅ Database connection closed")
+    
+    print("\n📈 Final Summary:")
+    print(f"✅ Processed: {processed}")
+    print(f"💾 Stored: {stored}")
+    print(f"⚠️ Skipped: {skipped}")
     return {"processed": processed, "stored": stored, "skipped": skipped}
+
+async def fetch_active_markets(limit=None, batch_size=50, conn=None, clob_client=None):
+    """Wrapper to maintain backward compatibility - uses optimized event fetching."""
+    return await fetch_active_events_optimized(limit, batch_size, conn, clob_client)
 
 async def process_market_batch(markets, conn, clob_client):
     """Process a batch of markets concurrently"""
@@ -202,37 +288,112 @@ async def process_market_batch(markets, conn, clob_client):
                 bid_price = prices.get("BUY")
                 ask_price = prices.get("SELL")
                 token_data.append((token_id, condition_id, token_name, bid_price, ask_price))
-        # Batch insert markets
+        # Optimize database operations with concurrent processing
         if market_data:
-            # await conn.executemany("""
-            #     INSERT INTO markets (id, title, expiry_date)
-            #     VALUES ($1, $2, $3)
-            #     ON CONFLICT (id) DO UPDATE SET 
-            #         title = EXCLUDED.title,
-            #         expiry_date = EXCLUDED.expiry_date;
-            # """, market_data)
-
-            # Push each market to the /poly endpoint
-            poly_url = os.getenv("WEBHOOK_URL", "http://localhost:8000") + "/poly"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                for market_id, market_name, _ in market_data:
+            # Concurrent database operations for better performance
+            db_tasks = []
+            
+            # Task 1: Check existing markets in PostgreSQL
+            async def check_existing_markets():
+                if not market_data:
+                    return set()
+                market_ids = [market_id for market_id, _, _ in market_data]
+                placeholders = ','.join(['$' + str(i+1) for i in range(len(market_ids))])
+                check_query = f"SELECT id FROM markets WHERE id IN ({placeholders})"
+                existing_records = await conn.fetch(check_query, *market_ids)
+                return {record['id'] for record in existing_records}
+            
+            # Task 2: Prepare ChromaDB push tasks
+            async def push_to_chromadb():
+                poly_url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000") + "/poly"
+                chromadb_tasks = []
+                
+                async def push_single_event(session, market_id, market_name):
                     try:
                         payload = {"id": market_id, "name": market_name}
-                        resp = await client.post(poly_url, json=payload)
+                        resp = await session.post(poly_url, json=payload)
                         if resp.status_code == 200:
-                            print(f"[Chroma] Pushed event {market_id} - {market_name}")
+                            result = await resp.json()
+                            if result.get("status") == "already_exists":
+                                return f"⚠️ [ChromaDB] Event already exists: {market_id}"
+                            else:
+                                return f"✅ [ChromaDB] Stored event: {market_id} - {market_name}"
                         else:
-                            print(f"[Chroma] Failed to push event {market_id}: {resp.text}")
+                            return f"❌ [ChromaDB] Failed to push event {market_id}: {resp.text}"
                     except Exception as e:
-                        print(f"[Chroma] Exception pushing event {market_id}: {e}")
-        # Batch insert tokens (with bid/ask)
-        # if token_data:
-        #     await conn.executemany("""
-        #         INSERT INTO tokens (id, market_id, name, bid_price, ask_price)
-        #         VALUES ($1, $2, $3, $4, $5)
-        #         ON CONFLICT (id) DO NOTHING;
-        #     """, token_data)
-        # print(f"✅ Batch stored: {len(valid_markets)} markets | {len(token_data)} tokens")
+                        return f"❌ [ChromaDB] Exception pushing event {market_id}: {e}"
+                
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    chromadb_tasks = [
+                        push_single_event(client, market_id, market_name) 
+                        for market_id, market_name, _ in market_data
+                    ]
+                    results = await asyncio.gather(*chromadb_tasks, return_exceptions=True)
+                    for result in results:
+                        if isinstance(result, Exception):
+                            print(f"❌ [ChromaDB] Task error: {result}")
+                        else:
+                            print(result)
+            
+            # Execute database check and ChromaDB push concurrently
+            existing_market_ids, _ = await asyncio.gather(
+                check_existing_markets(),
+                push_to_chromadb(),
+                return_exceptions=True
+            )
+            
+            # Handle potential errors from gather
+            if isinstance(existing_market_ids, Exception):
+                print(f"❌ Error checking existing markets: {existing_market_ids}")
+                existing_market_ids = set()
+            
+            # Filter out existing markets and insert new ones
+            new_market_data = [(market_id, title, expiry_date) 
+                              for market_id, title, expiry_date in market_data 
+                              if market_id not in existing_market_ids]
+            
+            # Batch insert new markets to PostgreSQL
+            if new_market_data:
+                await conn.executemany("""
+                    INSERT INTO markets (id, title, expiry_date)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (id) DO UPDATE SET 
+                        title = EXCLUDED.title,
+                        expiry_date = EXCLUDED.expiry_date;
+                """, new_market_data)
+                print(f"✅ [PostgreSQL] Inserted {len(new_market_data)} new markets")
+            else:
+                print(f"⚠️ [PostgreSQL] All {len(market_data)} markets already exist")
+        # Check for duplicates in tokens table before inserting
+        if token_data:
+            # Check existing tokens in PostgreSQL
+            existing_token_ids = set()
+            if token_data:
+                token_ids = [token_id for token_id, _, _, _, _ in token_data]
+                placeholders = ','.join(['$' + str(i+1) for i in range(len(token_ids))])
+                check_query = f"SELECT id FROM tokens WHERE id IN ({placeholders})"
+                existing_records = await conn.fetch(check_query, *token_ids)
+                existing_token_ids = {record['id'] for record in existing_records}
+            
+            # Filter out existing tokens
+            new_token_data = [(token_id, market_id, name, bid_price, ask_price) 
+                             for token_id, market_id, name, bid_price, ask_price in token_data 
+                             if token_id not in existing_token_ids]
+            
+            # Batch insert new tokens with prices
+            if new_token_data:
+                await conn.executemany("""
+                    INSERT INTO tokens (id, market_id, name, bid_price, ask_price)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (id) DO UPDATE SET
+                        bid_price = EXCLUDED.bid_price,
+                        ask_price = EXCLUDED.ask_price;
+                """, new_token_data)
+                print(f"✅ [PostgreSQL] Inserted {len(new_token_data)} new tokens")
+            else:
+                print(f"⚠️ [PostgreSQL] All {len(token_data)} tokens already exist")
+        
+        print(f"✅ Batch processed: {len(valid_markets)} markets | {len(token_data)} tokens")
         return len(valid_markets)
     except Exception as e:
         print(f"⚠️ Error storing batch: {e}")

@@ -38,6 +38,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "ollama serve &
+      sleep 10 &&
+      (ollama list | grep llama3.2 || ollama pull llama3.2:latest) &&
+      wait"
 
   twitter-webhook:
     image: polyai-app
@@ -88,7 +94,6 @@ services:
 
 volumes:
   backend_pgdata:
-    external: true
   ollama_data:
   huggingface_cache:
   pip_cache:
