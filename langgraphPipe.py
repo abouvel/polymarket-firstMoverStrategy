@@ -17,8 +17,26 @@ import os
 import json
 from pydantic import BaseModel
 from langchain_core.output_parsers import PydanticOutputParser
+from datetime import datetime
 
 import requests
+
+# --- Dashboard Broadcasting ---
+async def broadcast_trade_event(event_type: str, data: dict):
+    """Send trade events to dashboard webhook - async HTTP call"""
+    try:
+        import aiohttp
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "type": event_type,
+            "data": data
+        }
+        # Async HTTP POST to webhook
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{url}/api/broadcast", json=event, timeout=aiohttp.ClientTimeout(total=1)) as resp:
+                pass  # Fire and forget
+    except Exception as e:
+        print(f"⚠️ Dashboard broadcast failed: {e}")
 
 # --- Core Components ---
 url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
@@ -363,14 +381,58 @@ Respond with exactly one word: "significant" or "insignificant"
 
 # 💸 STEP 6: Trade
 
-def trade_step(state: GraphState):
+async def trade_step(state: GraphState):
     execute_trade_on_token(state["token_id"],state["headline"], state["enriched_headline"])
+    
+    # Broadcast trade executed event
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT t.name, m.title 
+            FROM tokens t 
+            JOIN markets m ON t.market_id = m.id 
+            WHERE t.id = %s
+        """, (state["token_id"],))
+        
+        result = cursor.fetchone()
+        if result:
+            token_name, market_name = result
+            await broadcast_trade_event("trade_executed", {
+                "token_id": state["token_id"],
+                "token_name": token_name,
+                "market_name": market_name
+            })
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Error broadcasting trade: {e}")
+    
     return {}
 
 # 🚫 STEP 6: Skip Trade
 
-def skip_trade_step(state: GraphState):
+async def skip_trade_step(state: GraphState):
     print(f"⏭️ Skipping trade - tweet not significant enough for market impact")
+    
+    # Broadcast trade skipped event
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT title FROM markets WHERE id = %s", (state["selected_id"],))
+        result = cursor.fetchone()
+        market_name = result[0] if result else "Unknown Market"
+        
+        await broadcast_trade_event("trade_skipped", {
+            "reason": "Low market impact - tweet not significant enough",
+            "market_name": market_name
+        })
+        
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Error broadcasting skip: {e}")
+    
     return {}
 
 

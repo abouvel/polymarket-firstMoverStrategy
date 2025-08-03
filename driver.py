@@ -189,7 +189,7 @@ async def main():
     # Initialize database with all markets from Polymarket
     print("🔄 Initializing database with Polymarket data...")
     try:
-        result = await fetch_active_markets()
+        result = await fetch_active_markets(limit=None, batch_size=50)
         print(f"✅ Database initialization completed: {result}")
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")

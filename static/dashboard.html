@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PolyAI Dashboard</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f5f5f5; 
+        }
+        .container { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+            max-width: 1400px; 
+            margin: 0 auto; 
+        }
+        .column { 
+            background: white; 
+            border-radius: 8px; 
+            padding: 20px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+        }
+        .header { 
+            font-size: 24px; 
+            font-weight: bold; 
+            margin-bottom: 20px; 
+            text-align: center; 
+        }
+        .tweet, .trade { 
+            border-bottom: 1px solid #eee; 
+            padding: 15px 0; 
+        }
+        .tweet:last-child, .trade:last-child { 
+            border-bottom: none; 
+        }
+        .username { 
+            font-weight: bold; 
+            color: #1da1f2; 
+        }
+        .timestamp { 
+            color: #666; 
+            font-size: 12px; 
+            float: right; 
+        }
+        .text { 
+            margin: 5px 0; 
+        }
+        .trade-executed { 
+            color: #00c851; 
+            font-weight: bold; 
+        }
+        .trade-skipped { 
+            color: #ff4444; 
+            font-weight: bold; 
+        }
+        .status { 
+            padding: 10px; 
+            text-align: center; 
+            font-weight: bold; 
+            color: #28a745; 
+        }
+    </style>
+</head>
+<body>
+    <div class="status" id="status">🔴 Connecting...</div>
+    <div class="container">
+        <div class="column">
+            <div class="header">📱 Live Tweets</div>
+            <div id="tweets"></div>
+        </div>
+        <div class="column">
+            <div class="header">💰 Trading Activity</div>
+            <div id="trades"></div>
+        </div>
+    </div>
+    
+    <script>
+        const tweetsDiv = document.getElementById('tweets');
+        const tradesDiv = document.getElementById('trades');
+        const statusDiv = document.getElementById('status');
+        
+        const eventSource = new EventSource('/events');
+        
+        eventSource.onopen = function() {
+            statusDiv.innerHTML = '🟢 Connected - Live';
+            statusDiv.style.color = '#28a745';
+        };
+        
+        eventSource.onerror = function() {
+            statusDiv.innerHTML = '🔴 Connection Lost';
+            statusDiv.style.color = '#dc3545';
+        };
+        
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const timestamp = new Date(data.timestamp).toLocaleTimeString();
+            
+            if (data.type === 'tweet_received') {
+                const tweetDiv = document.createElement('div');
+                tweetDiv.className = 'tweet';
+                tweetDiv.innerHTML = `
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="username">@${data.data.username}</div>
+                    <div class="text">${data.data.text}</div>
+                `;
+                tweetsDiv.insertBefore(tweetDiv, tweetsDiv.firstChild);
+                
+                // Keep only last 20 tweets
+                while (tweetsDiv.children.length > 20) {
+                    tweetsDiv.removeChild(tweetsDiv.lastChild);
+                }
+            }
+            
+            if (data.type === 'trade_executed') {
+                const tradeDiv = document.createElement('div');
+                tradeDiv.className = 'trade';
+                tradeDiv.innerHTML = `
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="trade-executed">✅ TRADE EXECUTED</div>
+                    <div>Token: ${data.data.token_name}</div>
+                    <div>Market: ${data.data.market_name}</div>
+                `;
+                tradesDiv.insertBefore(tradeDiv, tradesDiv.firstChild);
+                
+                // Keep only last 20 trades
+                while (tradesDiv.children.length > 20) {
+                    tradesDiv.removeChild(tradesDiv.lastChild);
+                }
+            }
+            
+            if (data.type === 'trade_skipped') {
+                const tradeDiv = document.createElement('div');
+                tradeDiv.className = 'trade';
+                tradeDiv.innerHTML = `
+                    <div class="timestamp">${timestamp}</div>
+                    <div class="trade-skipped">⏭️ TRADE SKIPPED</div>
+                    <div>Reason: ${data.data.reason}</div>
+                    <div>Market: ${data.data.market_name}</div>
+                `;
+                tradesDiv.insertBefore(tradeDiv, tradesDiv.firstChild);
+                
+                // Keep only last 20 trades
+                while (tradesDiv.children.length > 20) {
+                    tradesDiv.removeChild(tradesDiv.lastChild);
+                }
+            }
+        };
+        
+        // Load recent events from PostgreSQL
+        fetch('/api/recent')
+            .then(response => response.json())
+            .then(events => {
+                events.forEach(event => {
+                    // Simulate SSE event for initial load
+                    eventSource.onmessage({data: JSON.stringify(event)});
+                });
+            });
+    </script>
+</body>
+</html>

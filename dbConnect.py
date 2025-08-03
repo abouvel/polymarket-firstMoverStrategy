@@ -25,7 +25,7 @@ def get_db_connection():
         return None
 
 async def create_tables_async(conn):
-    """Create the markets and tokens tables if they do not exist (async version)."""
+    """Create the markets, tokens, and bought tables if they do not exist (async version)."""
     try:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS markets (
@@ -44,12 +44,27 @@ async def create_tables_async(conn):
                 FOREIGN KEY (market_id) REFERENCES markets(id) ON DELETE CASCADE
             );
         """)
-        print("✅ Tables 'markets' and 'tokens' created or already exist.")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bought (
+                TokenID TEXT PRIMARY KEY,
+                Tweet TEXT NOT NULL,
+                ContextHeadline TEXT,
+                Event TEXT,
+                Date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                username TEXT,
+                tweet_url TEXT,
+                market_title TEXT,
+                token_name TEXT,
+                reasoning TEXT,
+                decision_type TEXT DEFAULT 'execute'
+            );
+        """)
+        print("✅ Tables 'markets', 'tokens', and 'bought' created or already exist.")
     except Exception as e:
         print(f"❌ Failed to create tables: {e}")
 
 def create_markets_and_tokens_tables(conn):
-    """Create the markets and tokens tables if they do not exist."""
+    """Create the markets, tokens, and bought tables if they do not exist."""
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -69,6 +84,21 @@ def create_markets_and_tokens_tables(conn):
                     FOREIGN KEY (market_id) REFERENCES markets(id) ON DELETE CASCADE
                 );
             """)
-        print("✅ Tables 'markets' and 'tokens' created or already exist.")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bought (
+                    TokenID TEXT PRIMARY KEY,
+                    Tweet TEXT NOT NULL,
+                    ContextHeadline TEXT,
+                    Event TEXT,
+                    Date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    username TEXT,
+                    tweet_url TEXT,
+                    market_title TEXT,
+                    token_name TEXT,
+                    reasoning TEXT,
+                    decision_type TEXT DEFAULT 'execute'
+                );
+            """)
+        print("✅ Tables 'markets', 'tokens', and 'bought' created or already exist.")
     except Exception as e:
         print(f"❌ Failed to create tables: {e}")

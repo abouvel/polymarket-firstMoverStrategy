@@ -28,7 +28,8 @@ def connect_clob_client():
 def get_db_config():
     """Return DB config from environment variables."""
     return {
-        "host": os.getenv('POSTGRES_HOST'),
+        #os.getenv('POSTGRES_HOST')
+        "host": "localhost",
         "port": os.getenv('POSTGRES_PORT'),
         "user": os.getenv('POSTGRES_USER'),
         "password": os.getenv('POSTGRES_PASSWORD'),
@@ -63,38 +64,25 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
     await create_tables_async(conn)
     print("✅ Database tables ready")
     
-    # Use Gamma API for better filtering - filter out expired events server-side
+    # Use Gamma API for better filtering - get active events that end in the future
     now = datetime.now(timezone.utc)
-    end_date_min = now.isoformat()
-    print(f"📅 Filtering events with end_date_min: {end_date_min}")
+    print(f"📅 Current time: {now.isoformat()}")
     
-    params = {
-        'active': 'true',
-        'closed': 'false', 
-        'end_date_min': end_date_min,  # Only get events that haven't expired
-        'limit': batch_size,
-        'order': 'end_date',
-        'ascending': 'true'
-    }
+    limit_param = min(limit, batch_size) if limit else batch_size
     
-    if limit:
-        params['limit'] = min(limit, batch_size)
-    
-    print(f"🔍 API parameters: {params}")
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         offset = 0
         while True:
             try:
-                params['offset'] = offset
-                url = f"{gamma_host}/events"
+                url = f"{gamma_host}/events?active=true&closed=false&limit={limit_param}&offset={offset}"
                 print(f"🌐 Making API request to: {url}")
-                resp = await client.get(url, params=params)
+                resp = await client.get(url)
                 print(f"📡 API response status: {resp.status_code}")
                 resp.raise_for_status()
                 
                 payload = resp.json()
-                events = payload.get("data", [])
+                # API returns list directly, not wrapped in 'data'
+                events = payload if isinstance(payload, list) else payload.get("data", [])
                 
                 if not events:
                     print("📭 No more events to process")
@@ -103,52 +91,56 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
                 print(f"📦 Received {len(events)} active events (offset: {offset})")
                 print(f"🔍 Processing events...")
                 
-                # Convert events to market format and process concurrently
-                valid_events = []
+                # Filter and prepare events for concurrent processing
+                active_events = []
                 for event in events:
                     processed += 1
-                    print(f"📋 Processing event {processed}: {event.get('title', 'Unknown')[:50]}...")
-                    
-                    # Server-side filtering should handle this, but double-check
                     if not event.get('active', True) or event.get('closed', False):
                         print(f"⚠️ Skipping inactive/closed event: {event.get('id')}")
                         skipped += 1
                         continue
-                    
-                    # Convert event to market-like structure
-                    market_data = {
-                        'condition_id': event.get('id'),
-                        'question': event.get('title', ''),
-                        'end_date_iso': event.get('end_date'),
-                        'active': event.get('active', True),
-                        'closed': event.get('closed', False),
-                        'tokens': []  # Will be populated via separate API calls
-                    }
-                    
-                    # Get markets for this event to populate tokens
+                    active_events.append(event)
+                
+                print(f"📋 Processing {len(active_events)} active events concurrently...")
+                
+                # Process events concurrently
+                async def process_single_event(event):
                     try:
-                        markets_url = f"{host}/markets"
-                        print(f"🎯 Fetching tokens for event: {event.get('id')}")
-                        markets_resp = await client.get(markets_url, params={'event_id': event.get('id')})
+                        # Convert event to market-like structure
+                        market_data = {
+                            'condition_id': event.get('id'),
+                            'question': event.get('title', ''),
+                            'end_date_iso': event.get('end_date'),
+                            'active': event.get('active', True),
+                            'closed': event.get('closed', False),
+                            'tokens': []
+                        }
+                        
+                        # Get markets for this event to populate tokens
+                        markets_url = f"{host}/markets?event_id={event.get('id')}"
+                        markets_resp = await client.get(markets_url)
+                        
                         if markets_resp.status_code == 200:
                             markets_data = markets_resp.json()
                             if markets_data.get('data'):
-                                # Use the first market's tokens (events usually have one market)
                                 first_market = markets_data['data'][0]
                                 market_data['tokens'] = first_market.get('tokens', [])
-                                print(f"✅ Found {len(market_data['tokens'])} tokens for event")
-                            else:
-                                print(f"⚠️ No market data found for event {event.get('id')}")
-                        else:
-                            print(f"⚠️ Markets API returned status {markets_resp.status_code} for event {event.get('id')}")
+                            
+                        return market_data
                     except Exception as e:
-                        print(f"❌ Could not fetch tokens for event {event.get('id')}: {e}")
+                        print(f"❌ Error processing event {event.get('id')}: {e}")
+                        return None
+                
+                # Run all event processing concurrently
+                event_tasks = [process_single_event(event) for event in active_events]
+                event_results = await asyncio.gather(*event_tasks, return_exceptions=True)
+                
+                # Filter out None results and exceptions
+                valid_events = [result for result in event_results if result is not None and not isinstance(result, Exception)]
+                print(f"✅ Successfully processed {len(valid_events)} events")
                     
-                    valid_events.append(market_data)
-                    print(f"➕ Added event to valid_events list")
-                    
-                    if limit and processed >= limit:
-                        break
+                if limit and processed >= limit:
+                    break
                 
                 # Process events concurrently in smaller batches
                 if valid_events:
@@ -303,37 +295,29 @@ async def process_market_batch(markets, conn, clob_client):
                 existing_records = await conn.fetch(check_query, *market_ids)
                 return {record['id'] for record in existing_records}
             
-            # Task 2: Prepare ChromaDB push tasks
+            # Task 2: Push to ChromaDB sequentially (simpler, more reliable)
             async def push_to_chromadb():
                 poly_url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000") + "/poly"
-                chromadb_tasks = []
+                successful_pushes = 0
                 
-                async def push_single_event(session, market_id, market_name):
-                    try:
-                        payload = {"id": market_id, "name": market_name}
-                        resp = await session.post(poly_url, json=payload)
-                        if resp.status_code == 200:
-                            result = await resp.json()
-                            if result.get("status") == "already_exists":
-                                return f"⚠️ [ChromaDB] Event already exists: {market_id}"
+                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                    for market_id, market_name, _ in market_data:
+                        try:
+                            payload = {"id": str(market_id), "name": str(market_name)}
+                            resp = await client.post(poly_url, json=payload)
+                            if resp.status_code == 200:
+                                result = await resp.json()
+                                if result.get("status") == "already_exists":
+                                    continue  # Skip already existing
+                                else:
+                                    successful_pushes += 1
                             else:
-                                return f"✅ [ChromaDB] Stored event: {market_id} - {market_name}"
-                        else:
-                            return f"❌ [ChromaDB] Failed to push event {market_id}: {resp.text}"
-                    except Exception as e:
-                        return f"❌ [ChromaDB] Exception pushing event {market_id}: {e}"
+                                print(f"❌ ChromaDB push failed for {market_id}: HTTP {resp.status_code}")
+                        except Exception as e:
+                            print(f"❌ ChromaDB exception for {market_id}: {e}")
+                            continue
                 
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    chromadb_tasks = [
-                        push_single_event(client, market_id, market_name) 
-                        for market_id, market_name, _ in market_data
-                    ]
-                    results = await asyncio.gather(*chromadb_tasks, return_exceptions=True)
-                    for result in results:
-                        if isinstance(result, Exception):
-                            print(f"❌ [ChromaDB] Task error: {result}")
-                        else:
-                            print(result)
+                print(f"📤 ChromaDB: {successful_pushes}/{len(market_data)} new events stored")
             
             # Execute database check and ChromaDB push concurrently
             existing_market_ids, _ = await asyncio.gather(

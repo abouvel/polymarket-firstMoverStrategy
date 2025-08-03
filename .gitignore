@@ -6,14 +6,14 @@
 
 # Large embedding files
 event_embeddings.json
-
+/__pycache__/
 # Cache directories
 .cache/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
+*.json
 # Virtual environment
 venv/
 env/
