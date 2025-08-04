@@ -34,6 +34,13 @@ This system combines social media monitoring, AI analysis, and automated trading
 - **WebSockets**: Real-time Polymarket price feeds
 - **Docker Compose**: Multi-service orchestration
 
+### Frontend & Visualization
+- **Next.js**: React-based dashboard framework
+- **TypeScript**: Type-safe frontend development
+- **Tailwind CSS**: Utility-first styling
+- **Server-Sent Events (SSE)**: Real-time data streaming
+- **Responsive Design**: Mobile and desktop compatible
+
 ### Development Tools
 - **Docker**: Containerized deployment
 - **Python 3.x**: Primary development language
@@ -136,6 +143,38 @@ python langgraphTester.py
 ```bash
 python websocketPoly.py
 ```
+
+**Start Frontend Dashboard**:
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+## 🖥️ Frontend Dashboard Integration
+
+The system includes a real-time Next.js dashboard that provides comprehensive monitoring and visualization capabilities.
+
+### Features
+- **Live Tweet Monitoring**: Real-time display of incoming tweets from monitored accounts
+- **Trading Activity Tracking**: Immediate visualization of executed and skipped trades
+- **Connection Status**: Live indicator showing backend connectivity
+- **Responsive Design**: Works seamlessly on desktop and mobile devices
+- **Real-time Updates**: Server-Sent Events (SSE) for instant data streaming
+
+### Architecture
+- **Backend Integration**: Connects to FastAPI webhook server via REST API and SSE
+- **Data Flow**: 
+  - Initial load via `/api/recent` endpoint
+  - Live updates via `/events` SSE stream
+  - Automatic reconnection on connection loss
+- **State Management**: React hooks for real-time state synchronization
+- **Error Handling**: Graceful degradation when backend is unavailable
+
+### Access Points
+- **Dashboard URL**: http://localhost:3000
+- **API Endpoints**: http://localhost:8000/api/recent, http://localhost:8000/events
+- **Development**: Hot reload enabled for rapid iteration
 
 ## 📊 Database Operations
 
@@ -242,6 +281,101 @@ docker-compose logs twitter-webhook
 - Health checks for service dependencies
 - Graceful degradation when external APIs are unavailable
 - Comprehensive logging for debugging
+
+## 🚧 Development Challenges & Solutions
+
+Throughout the development of this AI-powered trading system, several significant challenges were encountered and resolved:
+
+### 1. Browser Automation & Anti-Bot Detection
+**Challenge**: Twitter's sophisticated anti-bot measures made reliable content scraping difficult.
+- Chrome automation frequently detected and blocked
+- Session management and authentication persistence
+- Rate limiting and IP-based restrictions
+
+**Solution**: 
+- Implemented `nodriver` with advanced stealth techniques
+- Persistent Chrome profiles for session continuity
+- Dynamic timeout handling and retry mechanisms
+- Docker containerization with proper browser flag configuration
+
+### 2. Real-time Data Pipeline Architecture
+**Challenge**: Coordinating multiple async services while maintaining data consistency.
+- FastAPI webhook server handling concurrent tweet processing
+- LangGraph pipeline blocking HTTP responses
+- Database connection pooling under high load
+- SSE connection management for frontend updates
+
+**Solution**:
+- Fire-and-forget async task pattern for AI pipeline execution
+- Connection pooling optimization for PostgreSQL
+- Event-driven architecture with proper error isolation
+- Robust SSE implementation with automatic reconnection
+
+### 3. AI Model Performance & Resource Management
+**Challenge**: Large language models causing system bottlenecks and timeouts.
+- LLaMA 3.2 inference taking 40+ seconds per request
+- Memory constraints with concurrent AI processing
+- Model loading delays affecting user experience
+
+**Solution**:
+- Migrated to lightweight TinyLlama (1.1B parameters) for 10-20x speed improvement
+- Implemented model pre-loading in Docker containers
+- Optimized prompt engineering for faster inference
+- Added comprehensive timeout handling and fallback mechanisms
+
+### 4. Database Schema & Data Consistency
+**Challenge**: Managing complex relationships between tweets, markets, and trades.
+- PostgreSQL port configuration conflicts
+- ChromaDB vector search integration complexity
+- Data synchronization between structured and vector databases
+- Migration handling for schema updates
+
+**Solution**:
+- Standardized port configurations across all services
+- Implemented dual-database architecture (PostgreSQL + ChromaDB)
+- Created robust data validation and cleanup procedures
+- Added comprehensive health checks and monitoring
+
+### 5. Frontend Integration & Real-time Updates
+**Challenge**: Building responsive dashboard with live data streaming.
+- Server-Sent Events implementation across Docker networks
+- CORS configuration for cross-origin requests
+- State management for real-time data updates
+- Network connectivity issues and graceful degradation
+
+**Solution**:
+- Implemented robust SSE with automatic reconnection
+- Proper CORS middleware configuration
+- React state management with error boundaries
+- Hybrid approach combining live data with fallback content
+
+### 6. Docker Orchestration & Service Dependencies
+**Challenge**: Managing complex multi-service architecture with proper startup order.
+- Service dependency resolution (Ollama → Webhook → Driver)
+- Volume mounting and data persistence
+- Network configuration between containers
+- Resource allocation and health monitoring
+
+**Solution**:
+- Implemented health checks with dependency conditions
+- Proper volume configuration for data persistence
+- Service discovery using Docker network hostnames
+- Comprehensive logging and monitoring setup
+
+### 7. API Integration & Rate Limiting
+**Challenge**: Managing external API dependencies and rate limits.
+- Polymarket API authentication and rate limiting
+- Tavily search API quota management
+- Twitter scraping without triggering blocks
+- WebSocket connection stability for price feeds
+
+**Solution**:
+- Implemented exponential backoff and retry logic
+- API quota monitoring and intelligent request batching
+- WebSocket reconnection with state preservation
+- Comprehensive error handling for all external dependencies
+
+These challenges provided valuable learning opportunities in distributed systems, AI/ML deployment, real-time data processing, and production-ready application architecture.
 
 ## 🤝 Contributing
 
