@@ -44,10 +44,38 @@ dist/
 build/
 .next/
 
-# Environment variables
+# Environment variables and secrets
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
+
+# API keys and credentials
+*.key
+*.pem
+*.p12
+*.pfx
+config.json
+secrets.json
+
+# Database data and credentials
+backend_pgdata/
+*.sqlite3
+*.db
+
+# Chrome browser profiles and cookies
+chrome-profile/
+*.cookies
+browser-data/
+
+# Vector database and AI model data
+chroma/
+*.sqlite3-*
+ollama_data/
+huggingface_cache/
+
+# Docker volumes and persistent data
+backend_pgdata/
+pip_cache/
 
 # Coverage reports
 htmlcov/

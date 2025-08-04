@@ -26,10 +26,127 @@ interface TradeEvent {
 
 type DashboardEvent = TweetEvent | TradeEvent;
 
+// Demo data for testing
+const DEMO_TWEETS: TweetEvent[] = [
+  {
+    timestamp: new Date(Date.now() - 30000).toISOString(),
+    type: "tweet_received",
+    data: {
+      tweet_id: "demo_1",
+      username: "elonmusk", 
+      text: "Do you ever have to restart your wifi router to \"fix\" your internet? I have been using Starlink at home for 4 years now and realized I have never once had to restart my wifi to get it to work - it just always works.",
+      url: "https://x.com/elonmusk/status/demo_1"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 120000).toISOString(),
+    type: "tweet_received",
+    data: {
+      tweet_id: "demo_2", 
+      username: "unusual_whales",
+      text: "BREAKING I just released the full report on Congress trading in 2024. Like every year since 2020, some US politicians beat the market. From the start of 2024 to year end, many had unusual trades & huge portfolio gains. Here are the top political traders of 2024.",
+      url: "https://x.com/unusual_whales/status/demo_2"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 300000).toISOString(),
+    type: "tweet_received", 
+    data: {
+      tweet_id: "demo_3",
+      username: "ABouvel16870",
+      text: "zohran down in polls...",
+      url: "https://x.com/ABouvel16870/status/demo_3"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 450000).toISOString(),
+    type: "tweet_received",
+    data: {
+      tweet_id: "demo_4",
+      username: "ABouvel16870",
+      text: "phillies get shohei...",
+      url: "https://x.com/ABouvel16870/status/demo_4"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 600000).toISOString(),
+    type: "tweet_received",
+    data: {
+      tweet_id: "demo_5",
+      username: "ABouvel16870",
+      text: "eagles win superbowl...",
+      url: "https://x.com/ABouvel16870/status/demo_5"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 750000).toISOString(),
+    type: "tweet_received",
+    data: {
+      tweet_id: "demo_6",
+      username: "elonmusk",
+      text: "Cool...",
+      url: "https://x.com/elonmusk/status/demo_6"
+    }
+  }
+];
+
+const DEMO_TRADES: TradeEvent[] = [
+  {
+    timestamp: new Date(Date.now() - 45000).toISOString(),
+    type: "trade_executed",
+    data: {
+      token_id: "demo_token_1",
+      token_name: "Yes",
+      market_name: "Will Zohran Mamdani win NYC Mayor race?"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 180000).toISOString(),  
+    type: "trade_executed",
+    data: {
+      token_id: "demo_token_2",
+      token_name: "No", 
+      market_name: "Will Philadelphia Phillies win World Series 2025?"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 320000).toISOString(),
+    type: "trade_executed", 
+    data: {
+      token_id: "demo_token_3",
+      token_name: "Yes",
+      market_name: "Will Philadelphia Eagles win Super Bowl 2025?"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 480000).toISOString(),
+    type: "trade_skipped",
+    data: {
+      market_name: "Will Starlink IPO happen in 2025?",
+      reason: "No relevant market found"
+    }
+  },
+  {
+    timestamp: new Date(Date.now() - 720000).toISOString(),
+    type: "trade_skipped",
+    data: {
+      market_name: "Will Congress pass trading restrictions?",
+      reason: "Market confidence below threshold"
+    }
+  }
+];
+
 export default function Dashboard() {
-  const [tweets, setTweets] = useState<TweetEvent[]>([]);
-  const [trades, setTrades] = useState<TradeEvent[]>([]);
-  const [connected, setConnected] = useState(false);
+  // Use demo data - comment out these lines to use empty arrays
+  const [tweets, setTweets] = useState<TweetEvent[]>(DEMO_TWEETS);
+  const [trades, setTrades] = useState<TradeEvent[]>(DEMO_TRADES);
+  const [connected, setConnected] = useState(true);
+  
+  // Use empty arrays for live data - uncomment these lines to disable demo data
+  // const [tweets, setTweets] = useState<TweetEvent[]>([]);
+  // const [trades, setTrades] = useState<TradeEvent[]>([]);
+  // const [connected, setConnected] = useState(false);
+  
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,7 +188,7 @@ export default function Dashboard() {
       }
     };
 
-    // Load recent events first
+    // Load recent events first - merge with demo data
     fetch("http://localhost:8000/api/recent")
       .then((response) => response.json())
       .then((events: DashboardEvent[]) => {
@@ -82,8 +199,9 @@ export default function Dashboard() {
           (e) => e.type === "trade_executed" || e.type === "trade_skipped"
         ) as TradeEvent[];
 
-        setTweets(tweetEvents.slice(0, 20));
-        setTrades(tradeEvents.slice(0, 20));
+        // Merge live data with demo data, keeping most recent first
+        setTweets((prev) => [...tweetEvents.slice(0, 10), ...prev].slice(0, 20));
+        setTrades((prev) => [...tradeEvents.slice(0, 10), ...prev].slice(0, 20));
       })
       .catch((err) => console.error("Failed to load recent events:", err));
 
