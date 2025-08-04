@@ -26,14 +26,13 @@ async def broadcast_trade_event(event_type: str, data: dict):
     """Send trade events to dashboard webhook - async HTTP call"""
     try:
         import aiohttp
-        event = {
-            "timestamp": datetime.now().isoformat(),
+        payload = {
             "type": event_type,
             "data": data
         }
         # Async HTTP POST to webhook
         async with aiohttp.ClientSession() as session:
-            async with session.post(f"{url}/api/broadcast", json=event, timeout=aiohttp.ClientTimeout(total=1)) as resp:
+            async with session.post(f"{url}/api/broadcast", json=payload, timeout=aiohttp.ClientTimeout(total=1)) as resp:
                 pass  # Fire and forget
     except Exception as e:
         print(f"⚠️ Dashboard broadcast failed: {e}")

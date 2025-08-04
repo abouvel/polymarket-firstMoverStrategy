@@ -297,7 +297,7 @@ async def process_market_batch(markets, conn, clob_client):
             
             # Task 2: Push to ChromaDB sequentially (simpler, more reliable)
             async def push_to_chromadb():
-                poly_url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000") + "/poly"
+                poly_url = os.getenv("WEBHOOK_URL", "http://localhost:8000") + "/poly"
                 successful_pushes = 0
                 
                 async with httpx.AsyncClient(timeout=30.0, verify=False) as client:

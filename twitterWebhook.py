@@ -1,18 +1,25 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import chromadb
-import uuid
 import os
-import getpass
 import psycopg2
-import asyncpg
 import asyncio
 import json
 from datetime import datetime
-from collections import deque
 from dotenv import load_dotenv
 from langgraphTester import runcom
 
+app = FastAPI()
+
+# Add CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 📁 Set path to "./chroma" relative to the script location
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,8 +34,8 @@ collection = client.get_or_create_collection(name="tweets")
 
 polymarketCollection = client.get_or_create_collection(name="events")
 
-# Dashboard event system - use PostgreSQL for persistence
-active_sse_connections = set()
+# Dashboard event system - simple single user
+current_dashboard = None
 
 def get_db_connection():
     load_dotenv()
@@ -41,22 +48,17 @@ def get_db_connection():
     )
 
 async def broadcast_event(event_type: str, data: dict):
-    event = {
-        "timestamp": datetime.now().isoformat(),
-        "type": event_type,
-        "data": data
-    }
-    
-    # Send to all active SSE connections
-    disconnected = set()
-    for queue in active_sse_connections:
+    global current_dashboard
+    if current_dashboard:
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "type": event_type,
+            "data": data
+        }
         try:
-            await queue.put(event)
+            await current_dashboard.put(event)
         except:
-            disconnected.add(queue)
-    
-    # Clean up disconnected clients
-    active_sse_connections -= disconnected
+            current_dashboard = None  # Dashboard disconnected
 
 @app.post("/api/broadcast")
 async def broadcast_endpoint(request: Request):
@@ -69,7 +71,6 @@ async def broadcast_endpoint(request: Request):
         print(f"❌ Broadcast error: {e}")
         return {"error": str(e)}
 
-app = FastAPI()
 
 @app.get("/db")
 def db():
@@ -172,7 +173,7 @@ async def receive_tweet(request: Request):
         # Only run AI pipeline for new tweets
         try:
             print("🚀 Running LangGraph...")
-            runcom(tweet_text)
+            await runcom(tweet_text)
             print("✅ LangGraph pipeline completed successfully")
         except Exception as langgraph_error:
             print(f"❌ LangGraph pipeline failed: {langgraph_error}")
@@ -197,9 +198,10 @@ async def dashboard():
 
 @app.get("/events")
 async def events():
+    global current_dashboard
     async def event_stream():
         client_queue = asyncio.Queue()
-        active_sse_connections.add(client_queue)
+        current_dashboard = client_queue  # Simple - just store the one connection
         
         try:
             while True:
@@ -208,61 +210,64 @@ async def events():
         except asyncio.CancelledError:
             pass
         finally:
-            active_sse_connections.discard(client_queue)
+            current_dashboard = None  # Clear when disconnected
     
     return StreamingResponse(event_stream(), media_type="text/plain")
 
 @app.get("/api/recent")
 async def get_recent_events():
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get recent tweets from ChromaDB metadata
+        # Get recent tweets from ChromaDB metadata (this should work)
         tweets_result = collection.get(limit=10)
         tweets = []
         if tweets_result and tweets_result.get('ids'):
             for i, tweet_id in enumerate(tweets_result['ids']):
                 metadata = tweets_result['metadatas'][i] if tweets_result.get('metadatas') else {}
+                document = tweets_result['documents'][i] if i < len(tweets_result['documents']) else ""
                 tweets.append({
                     "timestamp": datetime.now().isoformat(),
                     "type": "tweet_received", 
                     "data": {
                         "tweet_id": tweet_id,
                         "username": metadata.get('username', 'unknown'),
-                        "text": tweets_result['documents'][i][:100] + "..." if len(tweets_result['documents'][i]) > 100 else tweets_result['documents'][i]
+                        "text": document[:100] + "..." if len(document) > 100 else document
                     }
                 })
         
-        # Get recent trades from PostgreSQL
-        cursor.execute("""
-            SELECT TokenID, Tweet, Event, Date 
-            FROM bought 
-            ORDER BY Date DESC 
-            LIMIT 10
-        """)
-        
+        # Try to get trades from PostgreSQL (might fail)
         trades = []
-        for row in cursor.fetchall():
-            token_id, tweet, event, date = row
-            # Parse event text to extract market and token info
-            if "Executing trade on token" in event:
-                parts = event.split('"')
-                token_name = parts[1] if len(parts) > 1 else "Unknown"
-                market_name = parts[3] if len(parts) > 3 else "Unknown Market"
-                
-                trades.append({
-                    "timestamp": date.isoformat(),
-                    "type": "trade_executed",
-                    "data": {
-                        "token_id": token_id,
-                        "token_name": token_name,
-                        "market_name": market_name
-                    }
-                })
-        
-        cursor.close()
-        conn.close()
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT TokenID, Tweet, Event, Date 
+                FROM bought 
+                ORDER BY Date DESC 
+                LIMIT 10
+            """)
+            
+            for row in cursor.fetchall():
+                token_id, tweet, event, date = row
+                # Parse event text to extract market and token info
+                if "Executing trade on token" in event:
+                    parts = event.split('"')
+                    token_name = parts[1] if len(parts) > 1 else "Unknown"
+                    market_name = parts[3] if len(parts) > 3 else "Unknown Market"
+                    
+                    trades.append({
+                        "timestamp": date.isoformat(),
+                        "type": "trade_executed",
+                        "data": {
+                            "token_id": token_id,
+                            "token_name": token_name,
+                            "market_name": market_name
+                        }
+                    })
+            
+            cursor.close()
+            conn.close()
+        except Exception as db_error:
+            print(f"⚠️ Database error (continuing with tweets only): {db_error}")
         
         # Combine and sort by timestamp
         all_events = tweets + trades

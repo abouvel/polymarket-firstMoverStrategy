@@ -2,7 +2,7 @@ from langgraphPipe import graph  # Make sure prediction_agent.py is in same dire
 from pprint import pprint
 
 # 🟡 Provide a headline to test the pipeline
-def runcom(tweet):
+async def runcom(tweet):
     initial_state = {
         "headline": f"{tweet}",
         "enriched_headline": "",
@@ -13,9 +13,9 @@ def runcom(tweet):
         "token_id": ""
     }
 
-    # ▶️ Run full graph
+    # ▶️ Run full graph asynchronously
     print("\n🚀 Running LangGraph...\n")
-    final_result = graph.invoke(initial_state)
+    final_result = await graph.ainvoke(initial_state)
 
     print("\n✅ Final Output:")
     pprint(final_result)
