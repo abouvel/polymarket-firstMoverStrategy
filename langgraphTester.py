@@ -14,33 +14,33 @@ async def runcom(tweet):
     }
 
     # ▶️ Run full graph asynchronously
-    print("\n🚀 Running LangGraph...\n")
-    print(f"🔍 Initial state: {initial_state}")
+    print("\nRunning LangGraph...\n")
+    print(f"Initial state: {initial_state}")
     try:
         final_result = await graph.ainvoke(initial_state)
-        print(f"✅ LangGraph completed successfully!")
-        print(f"🔍 Final result: {final_result}")
+        print(f"LangGraph completed successfully!")
+        print(f"Final result: {final_result}")
     except Exception as e:
-        print(f"❌ LangGraph failed with error: {e}")
-        print(f"🔍 Error type: {type(e).__name__}")
+        print(f"LangGraph failed with error: {e}")
+        print(f"Error type: {type(e).__name__}")
         raise
 
-    print("\n✅ Final Output:")
+    print("\nFinal Output:")
     pprint(final_result)
     return final_result
 
 # Main function for testing
 async def main():
     test_tweet = "BREAKING: Zohran Mamdani drops 15 points in latest NYC mayoral poll, now trailing by significant margin"
-    print(f"🧪 Testing LangGraph with tweet: {test_tweet}")
+    print(f"Testing LangGraph with tweet: {test_tweet}")
     
     try:
         result = await runcom(test_tweet)
-        print(f"\n🎉 Test completed successfully!")
+        print(f"\nTest completed successfully!")
         return result
     except Exception as e:
-        print(f"\n💥 Test failed with error: {e}")
-        print(f"🔍 Error type: {type(e).__name__}")
+        print(f"\nTest failed with error: {e}")
+        print(f"Error type: {type(e).__name__}")
         import traceback
         traceback.print_exc()
         return None

@@ -32,18 +32,18 @@ scraping_stats = {
 def log_with_timestamp(message):
     """Log message with timestamp for Docker logs visibility"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] 🚀 DRIVER: {message}")
+    print(f"[{timestamp}] DRIVER: {message}")
 
 def log_stats():
     """Log current scraping statistics"""
     uptime = datetime.now() - scraping_stats["start_time"] if scraping_stats["start_time"] else "0:00:00"
-    log_with_timestamp(f"📊 STATS - Uptime: {uptime}, Scrapes: {scraping_stats['total_scrapes']}, "
+    log_with_timestamp(f"STATS - Uptime: {uptime}, Scrapes: {scraping_stats['total_scrapes']}, "
                       f"Tweets Sent: {scraping_stats['tweets_sent']}, "
                       f"Success Rate: {scraping_stats['successful_extractions']}/{scraping_stats['total_scrapes']}")
 
 def heartbeat():
     """Log heartbeat to prove driver is alive"""
-    log_with_timestamp("💓 HEARTBEAT - Driver is alive and monitoring Twitter")
+    log_with_timestamp("HEARTBEAT - Driver is alive and monitoring Twitter")
 
 async def load_existing_tweet_ids():
     """Load existing tweet IDs from ChromaDB via webhook API"""
@@ -54,13 +54,13 @@ async def load_existing_tweet_ids():
                     data = await response.json()
                     existing_ids = data.get("tweet_ids", [])
                     processed_tweet_ids.update(existing_ids)
-                    log_with_timestamp(f"✅ Loaded {len(existing_ids)} existing tweet IDs from ChromaDB")
+                    log_with_timestamp(f"Loaded {len(existing_ids)} existing tweet IDs from ChromaDB")
                     return len(existing_ids)
                 else:
-                    log_with_timestamp(f"⚠️ Failed to load existing tweet IDs: HTTP {response.status}")
+                    log_with_timestamp(f"WARNING: Failed to load existing tweet IDs: HTTP {response.status}")
                     return 0
     except Exception as e:
-        log_with_timestamp(f"❌ Error loading existing tweet IDs: {e}")
+        log_with_timestamp(f"ERROR: Error loading existing tweet IDs: {e}")
         return 0
 
 class TwitterTabMonitor:
@@ -73,16 +73,16 @@ class TwitterTabMonitor:
 
     async def get_tab(self,tab, url):
         try:
-            log_with_timestamp(f"🌐 [@{self.user}] Navigating to {url}")
+            log_with_timestamp(f"[@{self.user}] Navigating to {url}")
             return await tab.get(url)
         except KeyError as e:
-            log_with_timestamp(f"❌ [@{self.user}] Couldn't load {url}")
+            log_with_timestamp(f"ERROR: [@{self.user}] Couldn't load {url}")
             # nodriver tried to remove a handler for FrameStoppedLoading that wasn't there
             if e.args and e.args[0] is FrameStoppedLoading:
                 return
             raise
     async def setup(self):
-        log_with_timestamp(f"🔧 [@{self.user}] Setting up Twitter monitor")
+        log_with_timestamp(f"[@{self.user}] Setting up Twitter monitor")
         
         # open a fresh tab and enable fetch handling
         self.tab = await self.browser.get("draft:,")
@@ -94,7 +94,7 @@ class TwitterTabMonitor:
         await self.get_tab(self.tab, f"https://x.com/{self.user}")
         await asyncio.sleep(3)
         
-        log_with_timestamp(f"✅ [@{self.user}] Monitor setup complete, starting polling")
+        log_with_timestamp(f"[@{self.user}] Monitor setup complete, starting polling")
 
     async def poll(self):
         while True:
@@ -115,7 +115,7 @@ class TwitterTabMonitor:
         scraping_stats["total_scrapes"] += 1
         scraping_stats["last_activity"] = datetime.now()
         
-        log_with_timestamp(f"🔍 [@{self.user}] Starting scrape #{self.scrape_count}")
+        log_with_timestamp(f"[@{self.user}] Starting scrape #{self.scrape_count}")
         
         # reload the profile once
         await self.tab.get(f"https://x.com/{self.user}")
@@ -148,7 +148,7 @@ class TwitterTabMonitor:
             raw = raw.deep_serialized_value.value or []
 
         if not isinstance(raw, list) or not raw:
-            log_with_timestamp(f"⚠️ [@{self.user}] No tweets extracted (raw={raw})")
+            log_with_timestamp(f"WARNING: [@{self.user}] No tweets extracted (raw={raw})")
             scraping_stats["failed_extractions"] += 1
             return
         clean = []
@@ -176,14 +176,14 @@ class TwitterTabMonitor:
                 
                 # Check local cache first
                 if tweet_id in processed_tweet_ids:
-                    log_with_timestamp(f"⚠️ [@{self.user}] Skipping already processed tweet: {tweet_id}")
+                    log_with_timestamp(f"[@{self.user}] Skipping already processed tweet: {tweet_id}")
                     continue
                 
                 # Add to local cache immediately to prevent race conditions
                 processed_tweet_ids.add(tweet_id)
                 new_tweets.append(t)
                 
-                log_with_timestamp(f"🆕 [@{self.user}] NEW TWEET: {tweet_id} - {t['text'][:50]}...")
+                log_with_timestamp(f"[@{self.user}] NEW TWEET: {tweet_id} - {t['text'][:50]}...")
                 tasks.append(
                     session.post(
                         f"{WEBHOOK_URL}/receive",
@@ -198,7 +198,7 @@ class TwitterTabMonitor:
                 )
             
             if not tasks:
-                log_with_timestamp(f"📭 [@{self.user}] No new tweets found ({len(clean)} tweets checked)")
+                log_with_timestamp(f"[@{self.user}] No new tweets found ({len(clean)} tweets checked)")
                 scraping_stats["successful_extractions"] += 1
                 self.last_successful_scrape = datetime.now()
                 return []
@@ -211,7 +211,7 @@ class TwitterTabMonitor:
                 if isinstance(response, Exception):
                     failed_tweet_id = new_tweets[i]['id']
                     processed_tweet_ids.discard(failed_tweet_id)
-                    print(f"❌ Failed to send tweet {failed_tweet_id}: {response}")
+                    print(f"ERROR: Failed to send tweet {failed_tweet_id}: {response}")
                 
             return responses
 
@@ -236,15 +236,15 @@ class TwitterTabMonitor:
 
 async def main():
     # Initialize database with all markets from Polymarket
-    # print("🔄 Initializing database with Polymarket data...")
+    # print("Initializing database with Polymarket data...")
     # try:
     #     #result = await fetch_active_markets(limit=None, batch_size=50)
-    #     #print(f"✅ Database initialization completed: {result}")
+    #     #print(f"Database initialization completed: {result}")
     # except Exception as e:
-    #     print(f"❌ Database initialization failed: {e}")
+    #     print(f"ERROR: Database initialization failed: {e}")
     
     # Load existing tweet IDs from ChromaDB at startup
-    print("🔄 Loading existing tweet IDs from ChromaDB...")
+    print("Loading existing tweet IDs from ChromaDB...")
     await load_existing_tweet_ids()
     
     # Try multiple browser configurations for Docker compatibility
@@ -270,21 +270,21 @@ async def main():
     browser = None
     for config in browser_configs:
         try:
-            print(f"🌐 Attempting to start browser with config...")
+            print(f"Attempting to start browser with config...")
             browser = await uc.start(**config)
-            print("✅ Browser started successfully!")
+            print("Browser started successfully!")
             break
         except Exception as e:
-            print(f"❌ Browser config failed: {e}")
+            print(f"ERROR: Browser config failed: {e}")
             continue
     
     if not browser:
         raise Exception("Failed to start browser with any configuration")
     try:
         await browser.cookies.load()
-        print("✅ Cookies loaded, skipping manual login")
+        print("Cookies loaded, skipping manual login")
     except FileNotFoundError:
-        print("⚠️ No cookies found, logging in now")
+        print("WARNING: No cookies found, logging in now")
 
     # launch one monitor per user
     monitors = []

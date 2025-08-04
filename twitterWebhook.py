@@ -26,10 +26,10 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 chroma_path = os.path.join(base_dir, "chroma")
 
 
-# 🚀 Initialize Chroma client with local persistence
+# Initialize Chroma client with local persistence
 client = chromadb.PersistentClient(path=chroma_path)
 
-# 🔁 Create (or get) the collection
+# Create (or get) the collection
 collection = client.get_or_create_collection(name="tweets")
 
 polymarketCollection = client.get_or_create_collection(name="events")
@@ -50,12 +50,12 @@ def get_db_connection():
 async def run_langgraph_async(tweet_text: str):
     """Run LangGraph pipeline asynchronously without blocking the webhook response"""
     try:
-        print("🚀 Running LangGraph...")
+        print("Running LangGraph...")
         await runcom(tweet_text)
-        print("✅ LangGraph pipeline completed successfully")
+        print("LangGraph pipeline completed successfully")
     except Exception as langgraph_error:
-        print(f"❌ LangGraph pipeline failed: {langgraph_error}")
-        print(f"🔍 Error type: {type(langgraph_error).__name__}")
+        print(f"LangGraph pipeline failed: {langgraph_error}")
+        print(f"Error type: {type(langgraph_error).__name__}")
 
 async def broadcast_event(event_type: str, data: dict):
     global current_dashboard
@@ -78,7 +78,7 @@ async def broadcast_endpoint(request: Request):
         await broadcast_event(data["type"], data["data"])
         return {"status": "broadcasted"}
     except Exception as e:
-        print(f"❌ Broadcast error: {e}")
+        print(f"Broadcast error: {e}")
         return {"error": str(e)}
 
 
@@ -93,7 +93,7 @@ def get_tweet_ids():
         result = collection.get()
         return {"tweet_ids": result["ids"] or []}
     except Exception as e:
-        print(f"❌ Error getting tweet IDs: {e}")
+        print(f"Error getting tweet IDs: {e}")
         return {"tweet_ids": []}
 
 @app.post("/poly")
@@ -120,7 +120,7 @@ async def push_markets(request: Request):
         ids=[event_id]
     )
 
-    print(f"✅ Stored event: {event_name} (id: {event_id}) in polymarketCollection")
+    print(f"Stored event: {event_name} (id: {event_id}) in polymarketCollection")
     return {"status": "stored", "id": event_id}
 
 @app.post("/connect")
@@ -135,10 +135,10 @@ async def connect():
             dbname=os.getenv("POSTGRES_DB")
         )
         conn.autocommit = True
-        print("✅ DB Connection successful")
+        print("DB Connection successful")
         return conn
     except Exception as e:
-        print(f"❌ DB Connection failed: {e}")
+        print(f"DB Connection failed: {e}")
         return None
 
 @app.post("/receive")
@@ -157,11 +157,11 @@ async def receive_tweet(request: Request):
         # Check if tweet already exists
         existing = collection.get(ids=[tweet_id])
         if existing['ids']:
-            print(f"⚠️ Tweet {tweet_id} already stored, skipping")
+            print(f"Tweet {tweet_id} already stored, skipping")
             return {"status": "already_exists", "tweet_id": tweet_id}
         
         # Try to add tweet - ChromaDB will handle duplicates gracefully
-        print(f"🔍 Storing tweet {tweet_id}: '{tweet_text[:100]}...'")
+        print(f"Storing tweet {tweet_id}: '{tweet_text[:100]}...'")
         collection.add(
             documents=[tweet_text],
             metadatas=[{
@@ -170,8 +170,8 @@ async def receive_tweet(request: Request):
             }],
             ids=[tweet_id]
         )
-        print(f"✅ Successfully stored tweet {tweet_id} in ChromaDB")
-        print(f"✅ Stored tweet from @{username}")
+        print(f"Successfully stored tweet {tweet_id} in ChromaDB")
+        print(f"Stored tweet from @{username}")
         print(f"tweet id: {tweet_id}")
         
         # Broadcast tweet event to dashboard
@@ -190,10 +190,10 @@ async def receive_tweet(request: Request):
     except Exception as e:
         # Handle ChromaDB duplicate errors gracefully
         if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
-            print(f"⚠️ Tweet {tweet_id} already exists (caught exception)")
+            print(f"Tweet {tweet_id} already exists (caught exception)")
             return {"status": "already_exists", "tweet_id": tweet_id}
         else:
-            print(f"❌ Error storing tweet: {e}")
+            print(f"Error storing tweet: {e}")
             return {"error": f"Failed to store tweet: {str(e)}"}
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -276,7 +276,7 @@ async def get_recent_events():
             cursor.close()
             conn.close()
         except Exception as db_error:
-            print(f"⚠️ Database error (continuing with tweets only): {db_error}")
+            print(f"Database error (continuing with tweets only): {db_error}")
         
         # Combine and sort by timestamp
         all_events = tweets + trades
@@ -285,5 +285,5 @@ async def get_recent_events():
         return all_events[:20]
         
     except Exception as e:
-        print(f"❌ Error getting recent events: {e}")
+        print(f"Error getting recent events: {e}")
         return []

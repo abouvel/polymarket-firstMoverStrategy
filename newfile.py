@@ -43,30 +43,30 @@ async def get_asyncpg_connection():
 
 async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, clob_client=None):
     """Fetch active events using Gamma API with server-side filtering for better performance."""
-    print("🚀 Starting fetch_active_events_optimized...")
+    print("Starting fetch_active_events_optimized...")
     stored = 0
     skipped = 0
     processed = 0
     close_conn = False
     
     # Use asyncpg for better async database performance
-    print("🔗 Setting up database connection...")
+    print("Setting up database connection...")
     if conn is None:
         conn = await get_asyncpg_connection()
         close_conn = True
-        print("✅ Database connection established")
+        print("Database connection established")
     if clob_client is None:
         clob_client = connect_clob_client()
-        print("✅ CLOB client connected")
+        print("CLOB client connected")
     
     # Create tables if they don't exist
-    print("🏗️ Creating database tables if they don't exist...")
+    print("Creating database tables if they don't exist...")
     await create_tables_async(conn)
-    print("✅ Database tables ready")
+    print("Database tables ready")
     
     # Use Gamma API for better filtering - get active events that end in the future
     now = datetime.now(timezone.utc)
-    print(f"📅 Current time: {now.isoformat()}")
+    print(f"Current time: {now.isoformat()}")
     
     limit_param = min(limit, batch_size) if limit else batch_size
     
@@ -75,9 +75,9 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
         while True:
             try:
                 url = f"{gamma_host}/events?active=true&closed=false&limit={limit_param}&offset={offset}"
-                print(f"🌐 Making API request to: {url}")
+                print(f"Making API request to: {url}")
                 resp = await client.get(url)
-                print(f"📡 API response status: {resp.status_code}")
+                print(f"API response status: {resp.status_code}")
                 resp.raise_for_status()
                 
                 payload = resp.json()
@@ -85,23 +85,23 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
                 events = payload if isinstance(payload, list) else payload.get("data", [])
                 
                 if not events:
-                    print("📭 No more events to process")
+                    print("No more events to process")
                     break
                 
-                print(f"📦 Received {len(events)} active events (offset: {offset})")
-                print(f"🔍 Processing events...")
+                print(f"Received {len(events)} active events (offset: {offset})")
+                print(f"Processing events...")
                 
                 # Filter and prepare events for concurrent processing
                 active_events = []
                 for event in events:
                     processed += 1
                     if not event.get('active', True) or event.get('closed', False):
-                        print(f"⚠️ Skipping inactive/closed event: {event.get('id')}")
+                        print(f"WARNING: Skipping inactive/closed event: {event.get('id')}")
                         skipped += 1
                         continue
                     active_events.append(event)
                 
-                print(f"📋 Processing {len(active_events)} active events concurrently...")
+                print(f"Processing {len(active_events)} active events concurrently...")
                 
                 # Process events concurrently
                 async def process_single_event(event):
@@ -128,7 +128,7 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
                             
                         return market_data
                     except Exception as e:
-                        print(f"❌ Error processing event {event.get('id')}: {e}")
+                        print(f"ERROR: Error processing event {event.get('id')}: {e}")
                         return None
                 
                 # Run all event processing concurrently
@@ -137,28 +137,28 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
                 
                 # Filter out None results and exceptions
                 valid_events = [result for result in event_results if result is not None and not isinstance(result, Exception)]
-                print(f"✅ Successfully processed {len(valid_events)} events")
+                print(f"Successfully processed {len(valid_events)} events")
                     
                 if limit and processed >= limit:
                     break
                 
                 # Process events concurrently in smaller batches
                 if valid_events:
-                    print(f"🚀 Processing {len(valid_events)} valid events...")
+                    print(f"Processing {len(valid_events)} valid events...")
                     # Process in parallel batches for better performance
                     concurrent_batches = [valid_events[i:i+batch_size] for i in range(0, len(valid_events), batch_size)]
-                    print(f"📊 Split into {len(concurrent_batches)} batches for processing")
+                    print(f"Split into {len(concurrent_batches)} batches for processing")
                     batch_tasks = [process_market_batch(batch, conn, clob_client) for batch in concurrent_batches]
                     batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
                     
                     for i, result in enumerate(batch_results):
                         if isinstance(result, Exception):
-                            print(f"❌ Batch {i+1} processing error: {result}")
+                            print(f"ERROR: Batch {i+1} processing error: {result}")
                         else:
-                            print(f"✅ Batch {i+1} completed: {result} events processed")
+                            print(f"Batch {i+1} completed: {result} events processed")
                             stored += result
                 else:
-                    print("⚠️ No valid events to process in this batch")
+                    print("WARNING: No valid events to process in this batch")
                 
                 if limit and processed >= limit:
                     break
@@ -169,19 +169,19 @@ async def fetch_active_events_optimized(limit=None, batch_size=50, conn=None, cl
                     break  # No more results
                     
             except Exception as e:
-                print(f"❌ Error fetching events: {e}")
-                print(f"🔍 Exception details: {type(e).__name__}: {str(e)}")
+                print(f"ERROR: Error fetching events: {e}")
+                print(f"Exception details: {type(e).__name__}: {str(e)}")
                 break
     
     if close_conn:
-        print("🔗 Closing database connection...")
+        print("Closing database connection...")
         await conn.close()
-        print("✅ Database connection closed")
+        print("Database connection closed")
     
-    print("\n📈 Final Summary:")
-    print(f"✅ Processed: {processed}")
-    print(f"💾 Stored: {stored}")
-    print(f"⚠️ Skipped: {skipped}")
+    print("\nFinal Summary:")
+    print(f"Processed: {processed}")
+    print(f"Stored: {stored}")
+    print(f"Skipped: {skipped}")
     return {"processed": processed, "stored": stored, "skipped": skipped}
 
 async def fetch_active_markets(limit=None, batch_size=50, conn=None, clob_client=None):
@@ -216,7 +216,7 @@ async def process_market_batch(markets, conn, clob_client):
                 
                 # Debug: show first few date strings
                 if invalid_date_count < 3:
-                    print(f"🔍 Sample date: '{market.get('end_date_iso')}' -> '{end_date_str}'")
+                    print(f"Sample date: '{market.get('end_date_iso')}' -> '{end_date_str}'")
                 
                 expiry_date = datetime.fromisoformat(end_date_str)
                 # Convert to timezone-naive datetime for PostgreSQL
@@ -229,7 +229,7 @@ async def process_market_batch(markets, conn, clob_client):
                     continue  # Skip expired markets
             except Exception as e:
                 invalid_date_count += 1
-                print(f"⚠️ Invalid date format: {end_date_str} - {e}")
+                print(f"WARNING: Invalid date format: {end_date_str} - {e}")
                 continue  # Skip markets with invalid dates
         
         # Additional checks
@@ -246,7 +246,7 @@ async def process_market_batch(markets, conn, clob_client):
     
     # Print batch filtering summary
     if expired_count > 0 or invalid_date_count > 0 or inactive_count > 0 or missing_condition_count > 0:
-        print(f"🔍 Batch filtered: {len(markets)} total, {len(valid_markets)} valid")
+        print(f"Batch filtered: {len(markets)} total, {len(valid_markets)} valid")
         print(f"   - Expired: {expired_count}, Invalid dates: {invalid_date_count}")
         print(f"   - Inactive/closed: {inactive_count}, Missing condition_id: {missing_condition_count}")
     
@@ -312,12 +312,12 @@ async def process_market_batch(markets, conn, clob_client):
                                 else:
                                     successful_pushes += 1
                             else:
-                                print(f"❌ ChromaDB push failed for {market_id}: HTTP {resp.status_code}")
+                                print(f"ERROR: ChromaDB push failed for {market_id}: HTTP {resp.status_code}")
                         except Exception as e:
-                            print(f"❌ ChromaDB exception for {market_id}: {e}")
+                            print(f"ERROR: ChromaDB exception for {market_id}: {e}")
                             continue
                 
-                print(f"📤 ChromaDB: {successful_pushes}/{len(market_data)} new events stored")
+                print(f"ChromaDB: {successful_pushes}/{len(market_data)} new events stored")
             
             # Execute database check and ChromaDB push concurrently
             existing_market_ids, _ = await asyncio.gather(
@@ -328,7 +328,7 @@ async def process_market_batch(markets, conn, clob_client):
             
             # Handle potential errors from gather
             if isinstance(existing_market_ids, Exception):
-                print(f"❌ Error checking existing markets: {existing_market_ids}")
+                print(f"ERROR: Error checking existing markets: {existing_market_ids}")
                 existing_market_ids = set()
             
             # Filter out existing markets and insert new ones
@@ -345,9 +345,9 @@ async def process_market_batch(markets, conn, clob_client):
                         title = EXCLUDED.title,
                         expiry_date = EXCLUDED.expiry_date;
                 """, new_market_data)
-                print(f"✅ [PostgreSQL] Inserted {len(new_market_data)} new markets")
+                print(f"[PostgreSQL] Inserted {len(new_market_data)} new markets")
             else:
-                print(f"⚠️ [PostgreSQL] All {len(market_data)} markets already exist")
+                print(f"[PostgreSQL] All {len(market_data)} markets already exist")
         # Check for duplicates in tokens table before inserting
         if token_data:
             # Check existing tokens in PostgreSQL
@@ -373,14 +373,14 @@ async def process_market_batch(markets, conn, clob_client):
                         bid_price = EXCLUDED.bid_price,
                         ask_price = EXCLUDED.ask_price;
                 """, new_token_data)
-                print(f"✅ [PostgreSQL] Inserted {len(new_token_data)} new tokens")
+                print(f"[PostgreSQL] Inserted {len(new_token_data)} new tokens")
             else:
-                print(f"⚠️ [PostgreSQL] All {len(token_data)} tokens already exist")
+                print(f"[PostgreSQL] All {len(token_data)} tokens already exist")
         
-        print(f"✅ Batch processed: {len(valid_markets)} markets | {len(token_data)} tokens")
+        print(f"Batch processed: {len(valid_markets)} markets | {len(token_data)} tokens")
         return len(valid_markets)
     except Exception as e:
-        print(f"⚠️ Error storing batch: {e}")
+        print(f"WARNING: Error storing batch: {e}")
         return 0
 
 def main():

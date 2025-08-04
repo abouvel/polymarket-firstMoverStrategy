@@ -77,6 +77,10 @@ huggingface_cache/
 backend_pgdata/
 pip_cache/
 
+# Claude AI assistant files
+CLAUDE.md
+claude_desktop.config.json
+
 # Coverage reports
 htmlcov/
 .coverage

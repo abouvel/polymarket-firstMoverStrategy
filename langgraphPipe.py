@@ -37,7 +37,7 @@ async def broadcast_trade_event(event_type: str, data: dict):
             async with session.post(f"{url}/api/broadcast", json=payload, timeout=aiohttp.ClientTimeout(total=1)) as resp:
                 pass  # Fire and forget
     except Exception as e:
-        print(f"⚠️ Dashboard broadcast failed: {e}")
+        print(f"Dashboard broadcast failed: {e}")
 
 # --- Core Components ---
 
@@ -55,8 +55,8 @@ def get_db_connection():
         )
         return conn
     except Exception as e:
-        print(f"❌ Database connection error: {e}")
-        print(f"🔍 Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
+        print(f"Database connection error: {e}")
+        print(f"Connection details: {os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')} as {os.getenv('POSTGRES_USER')}")
         raise
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -169,9 +169,9 @@ Now, rewrite this as a clear, neutral sentence suitable for internal analysis. A
 
 def get_market_tokens(market_id: str):
     try:
-        print(f"🔗 [get_market_tokens] Connecting to PostgreSQL")
+        print(f"[get_market_tokens] Connecting to PostgreSQL")
         conn = get_db_connection()
-        print("✅ [get_market_tokens] PostgreSQL connection successful")
+        print("[get_market_tokens] PostgreSQL connection successful")
         
         cursor = conn.cursor()
         cursor.execute(
@@ -189,13 +189,13 @@ def get_market_tokens(market_id: str):
         conn.close()
         return tokens
     except Exception as e:
-        print(f"❌ [get_market_tokens] Error fetching tokens: {e}")
-        print(f"🔍 [get_market_tokens] Error type: {type(e).__name__}")
+        print(f"[get_market_tokens] Error fetching tokens: {e}")
+        print(f"[get_market_tokens] Error type: {type(e).__name__}")
         return []
 
 def decide_token_to_trade(structured_output, question,tokens):
     if len(tokens) < 2:
-        print("⚠️ Not enough tokens to make a decision.")
+        print("Not enough tokens to make a decision.")
         return None
 
     reasoning = structured_output.reasoning
@@ -230,9 +230,9 @@ Respond with just the number: 1 or 2.
 
 def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
     try:
-        print(f"🔗 [execute_trade_on_token] Connecting to PostgreSQL")
+        print(f"[execute_trade_on_token] Connecting to PostgreSQL")
         conn = get_db_connection()
-        print("✅ [execute_trade_on_token] PostgreSQL connection successful")
+        print("[execute_trade_on_token] PostgreSQL connection successful")
         
         cursor = conn.cursor()
 
@@ -246,7 +246,7 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         )
         token_row = cursor.fetchone()
         if not token_row:
-            print(f"❌ Token with ID {token_id} not found.")
+            print(f"Token with ID {token_id} not found.")
             cursor.close()
             conn.close()
             return
@@ -279,8 +279,8 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         conn.close()
 
     except Exception as e:
-        print(f"❌ [execute_trade_on_token] Error during trade execution: {e}")
-        print(f"🔍 [execute_trade_on_token] Error type: {type(e).__name__}")
+        print(f"[execute_trade_on_token] Error during trade execution: {e}")
+        print(f"[execute_trade_on_token] Error type: {type(e).__name__}")
 
 
 # 🔁 STATE
@@ -324,8 +324,8 @@ def decide_market(state: GraphState):
     
     # The market ID is stored as the ChromaDB document ID, need to get it from the collection
     # For now, we'll use a workaround since ChromaDB similarity_search doesn't return IDs
-    print(f"🔍 Selected document metadata: {selected_doc.metadata}")
-    print(f"🔍 Selected document content: {selected_doc.page_content}")
+    print(f"Selected document metadata: {selected_doc.metadata}")
+    print(f"Selected document content: {selected_doc.page_content}")
     
     # Try to find the market ID by searching the collection again
     search_results = polymarketCollection.get(
@@ -335,9 +335,9 @@ def decide_market(state: GraphState):
     
     if search_results and search_results.get("ids"):
         market_id = search_results["ids"][0]
-        print(f"✅ Found market ID: {market_id}")
+        print(f"Found market ID: {market_id}")
     else:
-        print(f"❌ Could not find market ID for: {selected_doc.metadata.get('name')}")
+        print(f"Could not find market ID for: {selected_doc.metadata.get('name')}")
         market_id = f"unknown_market_{selected_index}"
     return {
         "selected_id": market_id,
@@ -369,7 +369,7 @@ def check_significance(state: GraphState):
         cursor.close()
         conn.close()
     except Exception as e:
-        print(f"❌ Error getting market name: {e}")
+        print(f"Error getting market name: {e}")
         market_name = "Unknown Market"
     
     prompt = f"""
@@ -424,14 +424,14 @@ async def trade_step(state: GraphState):
         cursor.close()
         conn.close()
     except Exception as e:
-        print(f"❌ Error broadcasting trade: {e}")
+        print(f"Error broadcasting trade: {e}")
     
     return {}
 
 # 🚫 STEP 6: Skip Trade
 
 async def skip_trade_step(state: GraphState):
-    print(f"⏭️ Skipping trade - tweet not significant enough for market impact")
+    print(f"Skipping trade - tweet not significant enough for market impact")
     
     # Broadcast trade skipped event
     try:
@@ -449,7 +449,7 @@ async def skip_trade_step(state: GraphState):
         cursor.close()
         conn.close()
     except Exception as e:
-        print(f"❌ Error broadcasting skip: {e}")
+        print(f"Error broadcasting skip: {e}")
     
     return {}
 
