@@ -47,6 +47,16 @@ def get_db_connection():
         dbname=os.getenv("POSTGRES_DB")
     )
 
+async def run_langgraph_async(tweet_text: str):
+    """Run LangGraph pipeline asynchronously without blocking the webhook response"""
+    try:
+        print("🚀 Running LangGraph...")
+        await runcom(tweet_text)
+        print("✅ LangGraph pipeline completed successfully")
+    except Exception as langgraph_error:
+        print(f"❌ LangGraph pipeline failed: {langgraph_error}")
+        print(f"🔍 Error type: {type(langgraph_error).__name__}")
+
 async def broadcast_event(event_type: str, data: dict):
     global current_dashboard
     if current_dashboard:
@@ -151,6 +161,7 @@ async def receive_tweet(request: Request):
             return {"status": "already_exists", "tweet_id": tweet_id}
         
         # Try to add tweet - ChromaDB will handle duplicates gracefully
+        print(f"🔍 Storing tweet {tweet_id}: '{tweet_text[:100]}...'")
         collection.add(
             documents=[tweet_text],
             metadatas=[{
@@ -159,6 +170,7 @@ async def receive_tweet(request: Request):
             }],
             ids=[tweet_id]
         )
+        print(f"✅ Successfully stored tweet {tweet_id} in ChromaDB")
         print(f"✅ Stored tweet from @{username}")
         print(f"tweet id: {tweet_id}")
         
@@ -170,15 +182,8 @@ async def receive_tweet(request: Request):
             "url": tweet_url
         })
         
-        # Only run AI pipeline for new tweets
-        try:
-            print("🚀 Running LangGraph...")
-            await runcom(tweet_text)
-            print("✅ LangGraph pipeline completed successfully")
-        except Exception as langgraph_error:
-            print(f"❌ LangGraph pipeline failed: {langgraph_error}")
-            print(f"🔍 Error type: {type(langgraph_error).__name__}")
-            # Don't fail the entire request - tweet is already stored
+        # Only run AI pipeline for new tweets (fire-and-forget to avoid blocking)
+        asyncio.create_task(run_langgraph_async(tweet_text))
         
         return {"status": "stored", "tweet_id": tweet_id}
         
@@ -212,27 +217,31 @@ async def events():
         finally:
             current_dashboard = None  # Clear when disconnected
     
-    return StreamingResponse(event_stream(), media_type="text/plain")
+    return StreamingResponse(
+        event_stream(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )
 
 @app.get("/api/recent")
 async def get_recent_events():
     try:
         # Get recent tweets from ChromaDB metadata (this should work)
-        tweets_result = collection.get(limit=10)
+        tweets_result = collection.get(limit=50)
         tweets = []
         if tweets_result and tweets_result.get('ids'):
+            print(tweets_result)
             for i, tweet_id in enumerate(tweets_result['ids']):
                 metadata = tweets_result['metadatas'][i] if tweets_result.get('metadatas') else {}
                 document = tweets_result['documents'][i] if i < len(tweets_result['documents']) else ""
-                tweets.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "type": "tweet_received", 
-                    "data": {
-                        "tweet_id": tweet_id,
-                        "username": metadata.get('username', 'unknown'),
-                        "text": document[:100] + "..." if len(document) > 100 else document
-                    }
-                })
+                # Skip old tweets - we only want live ones via SSE
+                # Old tweets from ChromaDB don't have proper timestamps
+                pass
         
         # Try to get trades from PostgreSQL (might fail)
         trades = []

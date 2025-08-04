@@ -193,7 +193,7 @@ class TwitterTabMonitor:
                             "tweet_text": t["text"],
                             "url":        f"https://x.com/{self.user}/status/{tweet_id}"
                         },
-                        timeout=30
+                        timeout=40
                     )
                 )
             
@@ -247,13 +247,39 @@ async def main():
     print("🔄 Loading existing tweet IDs from ChromaDB...")
     await load_existing_tweet_ids()
     
-    browser = await uc.start(
-        browser_executable_path="/usr/bin/chromium",
-        browser_args=["--no-sandbox", "--disable-dev-shm-usage"],
-        headless=True, 
-        no_sandbox=True,
-        sandbox=False
-    )
+    # Try multiple browser configurations for Docker compatibility
+    browser_configs = [
+        {
+            "browser_executable_path": "/usr/bin/chromium",
+            "browser_args": [
+                "--no-sandbox", 
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--remote-debugging-port=9222"
+            ],
+            "headless": True, 
+            "no_sandbox": True,
+            "sandbox": False
+        }
+    ]
+    
+    browser = None
+    for config in browser_configs:
+        try:
+            print(f"🌐 Attempting to start browser with config...")
+            browser = await uc.start(**config)
+            print("✅ Browser started successfully!")
+            break
+        except Exception as e:
+            print(f"❌ Browser config failed: {e}")
+            continue
+    
+    if not browser:
+        raise Exception("Failed to start browser with any configuration")
     try:
         await browser.cookies.load()
         print("✅ Cookies loaded, skipping manual login")

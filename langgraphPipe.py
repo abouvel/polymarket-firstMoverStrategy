@@ -20,6 +20,8 @@ from langchain_core.output_parsers import PydanticOutputParser
 from datetime import datetime
 
 import requests
+url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
 # --- Dashboard Broadcasting ---
 async def broadcast_trade_event(event_type: str, data: dict):
@@ -38,8 +40,6 @@ async def broadcast_trade_event(event_type: str, data: dict):
         print(f"⚠️ Dashboard broadcast failed: {e}")
 
 # --- Core Components ---
-url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
 # --- Database Helper Functions ---
 def get_db_connection():
@@ -69,7 +69,7 @@ vectorstore = Chroma(
 )
 load_dotenv()
 llm = ChatOllama(
-    model="llama3.2:latest",
+    model="tinyllama:1.1b",  # Ultra-fast lightweight model
     temperature=0,
     base_url="http://ollama:11434"  # Use Docker service name instead of localhost
 )
@@ -319,7 +319,26 @@ def decide_market(state: GraphState):
         context=state["search_results"]
     ))
     selected_index = structured.selected_number - 1
-    market_id = state["top_k"][selected_index][0].metadata["id"]
+    # Get the selected document from ChromaDB search results
+    selected_doc = state["top_k"][selected_index][0]
+    
+    # The market ID is stored as the ChromaDB document ID, need to get it from the collection
+    # For now, we'll use a workaround since ChromaDB similarity_search doesn't return IDs
+    print(f"🔍 Selected document metadata: {selected_doc.metadata}")
+    print(f"🔍 Selected document content: {selected_doc.page_content}")
+    
+    # Try to find the market ID by searching the collection again
+    search_results = polymarketCollection.get(
+        where={"name": selected_doc.metadata.get("name")},
+        limit=1
+    )
+    
+    if search_results and search_results.get("ids"):
+        market_id = search_results["ids"][0]
+        print(f"✅ Found market ID: {market_id}")
+    else:
+        print(f"❌ Could not find market ID for: {selected_doc.metadata.get('name')}")
+        market_id = f"unknown_market_{selected_index}"
     return {
         "selected_id": market_id,
         "structured_output": structured
