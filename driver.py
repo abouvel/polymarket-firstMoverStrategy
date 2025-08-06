@@ -63,6 +63,178 @@ async def load_existing_tweet_ids():
         log_with_timestamp(f"ERROR: Error loading existing tweet IDs: {e}")
         return 0
 
+async def scrape_tweets_to_json(username, target_count=200, output_file=None):
+    """
+    Scrape tweets from a specific user and save to JSON file
+    
+    Args:
+        username: Twitter username to scrape (without @)
+        target_count: Number of tweets to scrape (default: 200)
+        output_file: Output JSON file path (default: {username}_tweets.json)
+    """
+    if output_file is None:
+        output_file = f"{username}_tweets.json"
+    
+    log_with_timestamp(f"Starting bulk scrape: {target_count} tweets from @{username}")
+    
+    # Try multiple browser configurations
+    browser_configs = [
+        {
+            "browser_executable_path": "/usr/bin/chromium-browser",
+            "browser_args": [
+                "--no-sandbox", 
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--remote-debugging-port=9222"
+            ],
+            "headless": True, 
+            "no_sandbox": True,
+            "sandbox": False
+        }
+    ]
+    
+    browser = None
+    for config in browser_configs:
+        try:
+            log_with_timestamp("Starting browser for bulk scrape...")
+            browser = await uc.start(**config)
+            log_with_timestamp("Browser started successfully!")
+            break
+        except Exception as e:
+            log_with_timestamp(f"ERROR: Browser config failed: {e}")
+            continue
+    
+    if not browser:
+        raise Exception("Failed to start browser with any configuration")
+    
+    try:
+        # Try to load cookies from current directory
+        await browser.cookies.load("cookies.json")
+        log_with_timestamp("Cookies loaded successfully for bulk scrape")
+    except FileNotFoundError:
+        log_with_timestamp("WARNING: No cookies found - you may get limited/older tweets without login")
+    
+    try:
+        # Setup tab
+        tab = await browser.get("draft:,")
+        
+        async def req_paused_handler(event):
+            try:
+                await tab.send(uc.cdp.fetch.continue_request(request_id=event.request_id))
+            except:
+                pass
+        
+        tab.add_handler(uc.cdp.fetch.RequestPaused, req_paused_handler)
+        await tab.send(uc.cdp.fetch.enable(handle_auth_requests=True))
+        
+        # Navigate to user profile
+        log_with_timestamp(f"Navigating to @{username} profile")
+        await tab.get(f"https://x.com/{username}")
+        await asyncio.sleep(5)  # Allow page to load
+        
+        scraped_tweets = []
+        last_tweet_count = 0
+        scroll_attempts = 0
+        max_scroll_attempts = 50  # Prevent infinite scrolling
+        
+        while len(scraped_tweets) < target_count and scroll_attempts < max_scroll_attempts:
+            scroll_attempts += 1
+            
+            log_with_timestamp(f"Scrape attempt {scroll_attempts}: {len(scraped_tweets)}/{target_count} tweets collected")
+            
+            # JavaScript to extract tweets (same as working _extract_and_send method)
+            js = """
+            (() => {
+                const els = Array.from(
+                    document.querySelectorAll("article[data-testid='tweet']")
+                );
+
+                return els
+                    .map(el => {
+                    const td = el.querySelector("[data-testid='tweetText']");
+                    if (!td) return null;
+                    
+                    const timeElement = el.querySelector("time");
+                    const timestamp = timeElement ? timeElement.getAttribute("datetime") : null;
+                    
+                    const text = Array.from(td.querySelectorAll("span"))
+                        .map(s => s.textContent.trim())
+                        .filter(t => t)
+                        .join(" ");
+                    return td.id && text ? { id: td.id, text: text, timestamp: timestamp } : null;
+                    })
+                    .filter(x => x);
+            })()
+            """
+            
+            # Extract tweets using same logic as working method
+            raw = await tab.evaluate(js, return_by_value=True)
+            
+            # Handle RemoteObject response (same as working method)
+            if not isinstance(raw, list) and hasattr(raw, "deep_serialized_value"):
+                raw = raw.deep_serialized_value.value or []
+            
+            if not isinstance(raw, list) or not raw:
+                log_with_timestamp(f"WARNING: No tweets extracted (raw={raw})")
+            else:
+                # Process the nested structure (same as working method)
+                current_tweets = []
+                for obj in raw:
+                    try:
+                        # obj['value'] is a list of [key, desc] pairs
+                        entry = {key: desc['value'] for key, desc in obj['value']}
+                        current_tweets.append(entry)
+                    except Exception as e:
+                        log_with_timestamp(f"Error processing tweet object: {e}")
+                        continue
+                
+                # Add new unique tweets
+                existing_ids = {tweet.get('id') for tweet in scraped_tweets if tweet.get('id')}
+                new_tweets = [tweet for tweet in current_tweets if tweet.get('id') and tweet['id'] not in existing_ids]
+                scraped_tweets.extend(new_tweets)
+                
+                log_with_timestamp(f"Found {len(new_tweets)} new tweets, total: {len(scraped_tweets)}")
+            
+            # Check if we're making progress
+            if len(scraped_tweets) == last_tweet_count:
+                log_with_timestamp("No new tweets found, scrolling down...")
+                # Scroll down to load more tweets
+                await tab.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                await asyncio.sleep(3)  # Wait for content to load
+            
+            last_tweet_count = len(scraped_tweets)
+            
+            # Stop if we've reached our target
+            if len(scraped_tweets) >= target_count:
+                scraped_tweets = scraped_tweets[:target_count]  # Trim to exact count
+                break
+        
+        # Save to JSON file
+        output_data = {
+            "username": username,
+            "scraped_at": datetime.now().isoformat(),
+            "tweet_count": len(scraped_tweets),
+            "tweets": scraped_tweets
+        }
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        
+        log_with_timestamp(f"Successfully scraped {len(scraped_tweets)} tweets from @{username}")
+        log_with_timestamp(f"Results saved to: {output_file}")
+        
+    finally:
+        if browser:
+            await browser.stop()
+            log_with_timestamp("Browser closed after bulk scrape")
+    
+    return output_file, len(scraped_tweets)
+
+
 class TwitterTabMonitor:
     def __init__(self, browser, user):
         self.browser = browser
@@ -131,11 +303,15 @@ class TwitterTabMonitor:
             .map(el => {{
             const td = el.querySelector("[data-testid='tweetText']");
             if (!td) return null;
+            
+            const timeElement = el.querySelector("time");
+            const timestamp = timeElement ? timeElement.getAttribute("datetime") : null;
+
             const text = Array.from(td.querySelectorAll("span"))
                 .map(s => s.textContent.trim())
                 .filter(t => t)
                 .join(" ");
-            return td.id && text ? {{ id: td.id, text }} : null;
+            return td.id && text ? {{ id: td.id, text: text, timestamp: timestamp }} : null;
             }})
             .filter(x => x);
         }})()
@@ -300,4 +476,16 @@ async def main():
     
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    
+    # Check if we want to run bulk scraping mode
+    if len(sys.argv) >= 3 and sys.argv[1] == "scrape":
+        username = sys.argv[2]
+        count = int(sys.argv[3]) if len(sys.argv) > 3 else 200
+        output = sys.argv[4] if len(sys.argv) > 4 else None
+        
+        print(f"Starting bulk scrape mode: {count} tweets from @{username}")
+        asyncio.run(scrape_tweets_to_json(username, count, output))
+    else:
+        # Run normal monitoring mode
+        asyncio.run(main())
