@@ -20,6 +20,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from datetime import datetime
 
 import requests
+import csv
 url = os.getenv("WEBHOOK_URL", "http://twitter-webhook:8000")
 embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")  # 384-dimensional
 
@@ -73,7 +74,6 @@ llm = ChatOllama(
     temperature=0,
     base_url="http://ollama:11434"  # Use Docker service name instead of localhost
 )
-search = TavilySearch(api_key=tavily_api_key)
 
 
 
@@ -143,26 +143,19 @@ Respond in JSON with:
 """
     return model_with_structure.invoke(input_prompt)
 
-def search_web_context(query: str):
+def search_web_context(query: str, date: str):
+    search = TavilySearch(api_key=tavily_api_key, end_date=date)
+
     return search.invoke({"query": query})
 
 def summarize_headline_with_context(headline: str, context: str) -> str:
     prompt = f"""
-You are a neutral news assistant. Your job is to rephrase news headlines and related context into clear, factual summaries.
+You are a neutral news assistant. Your job is to create a clean, factual summary in 1-2 sentences.
 
-Important:
-- Do not reject any headline.
-- You are NOT making judgments, promoting content, or offering advice.
-- You are ONLY restating a headline and context in plain language.
-- You may reword sensitive topics, but do not censor or editorialize.
+Headline: \"{headline}\"
+Context: \"{context}\"
 
-Headline:
-\"{headline}\"
-
-Context:
-\"{context}\"
-
-Now, rewrite this as a clear, neutral sentence suitable for internal analysis. Avoid ambiguity. Just report the facts.
+Write a clear, neutral summary in 1-2 sentences. Focus on facts only. No analysis, questions, or extra formatting.
 """
     return llm.invoke(prompt).content
 
@@ -192,6 +185,117 @@ def get_market_tokens(market_id: str):
         print(f"[get_market_tokens] Error fetching tokens: {e}")
         print(f"[get_market_tokens] Error type: {type(e).__name__}")
         return []
+
+def get_historical_price(token_id: str, start_timestamp: int, end_timestamp: int):
+    """
+    Fetch historical price data from Polymarket API
+    GET https://clob.polymarket.com/prices-history?market=TOKEN_ID&startTs=START&endTs=END&fidelity=1
+    """
+    try:
+        url = f"https://clob.polymarket.com/prices-history"
+        params = {
+            "market": token_id,
+            "startTs": start_timestamp,
+            "endTs": end_timestamp,
+            "fidelity": 1
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        if data and len(data) > 0:
+            # Return the last price in the time range
+            return float(data[-1].get('price', 0))
+        return None
+        
+    except Exception as e:
+        print(f"Error fetching historical price for {token_id}: {e}")
+        return None
+
+def write_action_to_csv(action: str, state: dict, trade_data: dict = None):
+    """Write trade or skip action to CSV file"""
+    csv_filename = 'trades.csv'
+    file_exists = os.path.exists(csv_filename)
+    
+    # Clean tweet text - extract just the text content
+    tweet_text = state.get('headline', '')
+    if isinstance(tweet_text, str) and tweet_text.startswith("{'id':"):
+        try:
+            # Extract text from tweet dict string
+            import ast
+            tweet_dict = ast.literal_eval(tweet_text)
+            tweet_text = tweet_dict.get('text', tweet_text)[:200]  # Limit length
+        except:
+            pass
+    
+    # Base data from state
+    csv_data = {
+        'date': state.get('date', ''),
+        'tweet': tweet_text,
+        'market_name': '',
+        'token_name': '',
+        'action': action,
+        'purchase_price': None,
+        'price_24h': None,
+        'profit_loss_pct': None,
+        'reasoning': state.get('enriched_headline', '')[:300] if state.get('enriched_headline') else '',  # Limit length
+        'skip_reason': ''
+    }
+    
+    # Get market name from selected_id
+    if state.get('selected_id') and state['selected_id'] != 'unknown_market_0':
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT title FROM markets WHERE id = %s", (state['selected_id'],))
+            market_row = cursor.fetchone()
+            if market_row:
+                csv_data['market_name'] = market_row[0][:100]  # Limit length
+            else:
+                csv_data['market_name'] = "No matching market found"
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error getting market name for CSV: {e}")
+            csv_data['market_name'] = "Database error"
+    else:
+        csv_data['market_name'] = "No relevant markets found"
+    
+    # Add trade-specific data if provided
+    if trade_data:
+        csv_data.update({
+            'token_name': trade_data.get('token_name', ''),
+            'purchase_price': trade_data.get('purchase_price'),
+            'price_24h': trade_data.get('current_price'),
+            'profit_loss_pct': trade_data.get('profit_loss')
+        })
+    
+    # Add skip reason for skipped actions
+    if action == 'SKIP':
+        csv_data['skip_reason'] = 'Low market impact - tweet not significant enough'
+    
+    with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['date', 'tweet', 'market_name', 'token_name', 'action', 'purchase_price', 'price_24h', 'profit_loss_pct', 'reasoning', 'skip_reason']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        if not file_exists:
+            writer.writeheader()
+        
+        writer.writerow(csv_data)
+
+def write_backtest_result(csv_filename: str, trade_data: dict):
+    """Write backtest results to CSV file - legacy function"""
+    file_exists = os.path.exists(csv_filename)
+    
+    with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['date', 'tweet', 'market_name', 'token_name', 'action', 'purchase_price', 'price_24h', 'profit_loss_pct', 'reasoning']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        if not file_exists:
+            writer.writeheader()
+        
+        writer.writerow(trade_data)
 
 def decide_token_to_trade(structured_output, question,tokens):
     if len(tokens) < 2:
@@ -228,7 +332,7 @@ Respond with just the number: 1 or 2.
 
 
 
-def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
+def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str, trade_date: str = None):
     try:
         print(f"[execute_trade_on_token] Connecting to PostgreSQL")
         conn = get_db_connection()
@@ -263,24 +367,79 @@ def execute_trade_on_token(token_id: str, headline: str, buffHeadline: str):
         )
         market_row = cursor.fetchone()
         market_name = market_row[0] if market_row else "Unknown Market"
-        text = f" Executing trade on token \"{token_name}\" from market \"{market_name}\""
-        print(text)
         
+        # For backtesting: get historical prices
+        purchase_price = None
+        current_price = None
+        profit_loss = None
+        
+        if trade_date:
+            # Convert trade_date to timestamp
+            trade_timestamp = int(datetime.fromisoformat(trade_date).timestamp())
+            
+            # Get price at purchase time (within 1 hour window)
+            purchase_price = get_historical_price(token_id, trade_timestamp - 3600, trade_timestamp + 3600)
+            
+            # Get price 24 hours later for P&L calculation
+            end_timestamp = trade_timestamp + 86400  # +24 hours
+            current_price = get_historical_price(token_id, end_timestamp - 3600, end_timestamp + 3600)
+            
+            if purchase_price and current_price:
+                profit_loss = ((current_price - purchase_price) / purchase_price) * 100  # Percentage
+        
+        # Create comprehensive log entry
+        text = f"TRADE: {token_name} | Market: {market_name} | Date: {trade_date}"
+        if purchase_price:
+            text += f" | Buy: ${purchase_price:.3f}"
+        if current_price:
+            text += f" | Sell: ${current_price:.3f}"
+        if profit_loss is not None:
+            text += f" | P&L: {profit_loss:+.2f}%"
+        
+        print(f"\n{'='*80}")
+        print(f"🎯 BACKTEST TRADE EXECUTED")
+        print(f"📊 Market: {market_name}")
+        print(f"🎫 Token: {token_name}")
+        print(f"📅 Date: {trade_date}")
+        print(f"📰 Tweet: {headline[:100]}...")
+        if purchase_price:
+            print(f"💰 Purchase Price: ${purchase_price:.4f}")
+        if current_price:
+            print(f"💵 Price +24h: ${current_price:.4f}")
+        if profit_loss is not None:
+            color = "🟢" if profit_loss > 0 else "🔴" if profit_loss < 0 else "🟡"
+            print(f"{color} P&L: {profit_loss:+.2f}%")
+        print(f"{'='*80}\n")
+        
+        # Store in database with enhanced schema
         cursor.execute(
             """
-            INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline, Event)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (TokenID) DO NOTHING
+            INSERT INTO BOUGHT (TokenID, Tweet, ContextHeadline, Event, Date, PurchasePrice, CurrentPrice, ProfitLoss)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (TokenID) DO UPDATE SET
+                Tweet = EXCLUDED.Tweet,
+                ContextHeadline = EXCLUDED.ContextHeadline,
+                Event = EXCLUDED.Event,
+                Date = EXCLUDED.Date,
+                PurchasePrice = EXCLUDED.PurchasePrice,
+                CurrentPrice = EXCLUDED.CurrentPrice,
+                ProfitLoss = EXCLUDED.ProfitLoss
             """,
-            (token_id, headline, buffHeadline, text)
+            (token_id, headline, buffHeadline, text, trade_date, purchase_price, current_price, profit_loss)
         )
+        
         conn.commit()
         cursor.close()
         conn.close()
+        
+        # Note: CSV writing is now handled in trade_step() to avoid duplicates
+        
+        return {"structured_output": f"{text}", "purchase_price": purchase_price, "current_price": current_price, "profit_loss": profit_loss}
 
     except Exception as e:
         print(f"[execute_trade_on_token] Error during trade execution: {e}")
         print(f"[execute_trade_on_token] Error type: {type(e).__name__}")
+        return {"error": str(e)}
 
 
 # 🔁 STATE
@@ -292,16 +451,34 @@ class GraphState(TypedDict):
     structured_output: dict
     selected_id: str
     token_id: str
+    date: str
+    enriched_date: str  # Added for date enrichment
 
 # 🔍 STEP 1: Search + Enrich Headline
 
 def enrich_headline(state: GraphState):
-    context = search_web_context(state["headline"])
+
+    
+    
+    # Convert date to YYYY-MM-DD format
+    date_str = state.get("date", "")
+    if date_str:
+        try:
+            parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            formatted_date = parsed_date.strftime("%Y-%m-%d")
+        except:
+            formatted_date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        formatted_date = datetime.now().strftime("%Y-%m-%d")
+    
+    context = search_web_context(state["headline"], formatted_date)
     enriched = summarize_headline_with_context(state["headline"], context)
     print(f"Enriched Headline {enriched}")
+
     return {
         "search_results": context,
-        "enriched_headline": enriched
+        "enriched_headline": enriched,
+        "enriched_date": formatted_date
     }
 
 # 📈 STEP 2: Embed + Search
@@ -328,7 +505,7 @@ def decide_market(state: GraphState):
     print(f"Selected document content: {selected_doc.page_content}")
     
     # Try to find the market ID by searching the collection again
-    search_results = polymarketCollection.get(
+    search_results = vectorstore.get(
         where={"name": selected_doc.metadata.get("name")},
         limit=1
     )
@@ -374,7 +551,7 @@ def check_significance(state: GraphState):
     
     prompt = f"""
 You are an expert market analyst evaluating whether news will significantly impact prediction market odds.
-
+The Date is {state["date"]} take this into consideration and act accordingly.
 Tweet: "{state["headline"]}"
 Context: "{state["enriched_headline"]}"
 Market: "{market_name}"
@@ -400,7 +577,10 @@ Respond with exactly one word: "significant" or "insignificant"
 # 💸 STEP 6: Trade
 
 async def trade_step(state: GraphState):
-    execute_trade_on_token(state["token_id"],state["headline"], state["enriched_headline"])
+    execute_trade_on_token(state["token_id"], state["headline"], state["enriched_headline"], state.get("date"))
+    
+    # Write trade to CSV using modular function
+    write_action_to_csv('BUY', state)
     
     # Broadcast trade executed event
     try:
@@ -432,6 +612,9 @@ async def trade_step(state: GraphState):
 
 async def skip_trade_step(state: GraphState):
     print(f"Skipping trade - tweet not significant enough for market impact")
+    
+    # Write skip to CSV using modular function
+    write_action_to_csv('SKIP', state)
     
     # Broadcast trade skipped event
     try:
@@ -489,5 +672,5 @@ initial_state = {
     "top_k": [],
     "structured_output": {},
     "selected_id": "",
-    "token_id": ""
+    "token_id": "",
 }

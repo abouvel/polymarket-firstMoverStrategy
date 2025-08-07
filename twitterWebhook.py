@@ -86,6 +86,10 @@ async def broadcast_endpoint(request: Request):
 def db():
     return collection
 
+@app.get("/polydb")
+def polydb():
+    return polymarketCollection
+
 @app.get("/tweet-ids")
 def get_tweet_ids():
     """Get all existing tweet IDs from ChromaDB"""

@@ -1,5 +1,6 @@
 from langgraphPipe import graph  # Make sure prediction_agent.py is in same directory
 from pprint import pprint
+from datetime import datetime
 
 # 🟡 Provide a headline to test the pipeline
 async def runcom(tweet):
@@ -10,7 +11,8 @@ async def runcom(tweet):
         "top_k": [],
         "structured_output": {},
         "selected_id": "",
-        "token_id": ""
+        "token_id": "",
+        "date": datetime.now().isoformat()
     }
 
     # ▶️ Run full graph asynchronously

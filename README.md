@@ -232,11 +232,12 @@ ChromaDB → LangGraph Pipeline → Market Analysis → Trade Execution
 
 ### AI Pipeline Steps
 
-1. **Content Enrichment**: Web search via Tavily API
+1. **Content Enrichment**: Date-aware web search via Tavily API
 2. **Vector Similarity**: ChromaDB semantic matching
 3. **Market Analysis**: LLM-based relevance scoring
 4. **Trade Decision**: Structured output with reasoning
-5. **Execution Logging**: PostgreSQL trade records
+5. **Significance Check**: LLM evaluates >5% price movement potential
+6. **Execution Logging**: PostgreSQL trade records with date tracking
 
 ## 🎯 Configuration Options
 
