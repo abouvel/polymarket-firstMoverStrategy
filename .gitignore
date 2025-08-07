@@ -35,7 +35,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-
+session.dat
+twitter_session.json
 # Node modules (for frontend)
 node_modules/
 
