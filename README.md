@@ -1,7 +1,7 @@
 AI-Powered Polymarket Trading Bot
 =================================
 
-An AI trading system that monitors Twitter for market-relevant content, processes it through an AI pipeline, and executes automated trades on Polymarket based on LLM analysis.
+An AI trading system that monitors Twitter for market-relevant content, processes it through an AI pipeline, and executes automated trades on Polymarket based on LLM analysis. I chose polymarket over the stock market due to a lack of traditional players, and subsequently higher inefficiencies.
 
 <img width="538" height="408" alt="image" src="https://github.com/user-attachments/assets/2bd97696-29c3-49e7-99ee-8ee74eafd5ed" />
  *Real-time dashboard showing live tweet monitoring and trading activity*
