@@ -89,6 +89,7 @@ Real-time Next.js dashboard with comprehensive monitoring capabilities:
 
 Vector Embedding Visualization
 -  **https://www.youtube.com/watch?v=6-y4AuxsqeA**
+
 How to Run
 ----------
 
